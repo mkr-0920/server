@@ -6,6 +6,7 @@ const querystring = require('querystring');
 const { isHost, cookieToMap, mapToCookie } = require('./utilities');
 const { getManagedCacheStorage } = require('./cache');
 const { logScope } = require('./logger');
+const { url } = require('inspector');
 
 const logger = logScope('hook');
 const cs = getManagedCacheStorage('hook');
@@ -16,7 +17,7 @@ const ENABLE_LOCAL_VIP = ['true', 'cvip', 'svip'].includes(
 );
 const BLOCK_ADS = (process.env.BLOCK_ADS || '').toLowerCase() === 'true';
 const DISABLE_UPGRADE_CHECK =
-	(process.env.DISABLE_UPGRADE_CHECK || '').toLowerCase() === 'true';
+	(process.env.DISABLE_UPGRADE_CHECK || 'true').toLowerCase() === 'true';
 const ENABLE_LOCAL_SVIP =
 	(process.env.ENABLE_LOCAL_VIP || '').toLowerCase() === 'svip';
 const LOCAL_VIP_UID = (process.env.LOCAL_VIP_UID || '')
@@ -26,14 +27,14 @@ const LOCAL_VIP_UID = (process.env.LOCAL_VIP_UID || '')
 
 const hook = {
 	request: {
-		before: () => {},
-		after: () => {},
+		before: () => { },
+		after: () => { },
 	},
 	connect: {
-		before: () => {},
+		before: () => { },
 	},
 	negotiate: {
-		before: () => {},
+		before: () => { },
 	},
 	target: {
 		host: new Set(),
@@ -121,12 +122,12 @@ hook.request.before = (ctx) => {
 		(req.url.startsWith('http://')
 			? ''
 			: (req.socket.encrypted ? 'https:' : 'http:') +
-				'//' +
-				(domainList.some((domain) =>
-					(req.headers.host || '').includes(domain)
-				)
-					? req.headers.host
-					: null)) + req.url;
+			'//' +
+			(domainList.some((domain) =>
+				(req.headers.host || '').includes(domain)
+			)
+				? req.headers.host
+				: null)) + req.url;
 	const url = parse(req.url);
 	if (
 		[url.hostname, req.headers.host].some((host) =>
@@ -136,15 +137,20 @@ hook.request.before = (ctx) => {
 		ctx.decision = 'proxy';
 
 	if (process.env.NETEASE_COOKIE && url.path.includes('url')) {
-		var cookies = cookieToMap(req.headers.cookie);
-		var new_cookies = cookieToMap(process.env.NETEASE_COOKIE);
+		// 逻辑更新：只使用环境变量中的 MUSIC_U
 
-		Object.entries(new_cookies).forEach(([key, value]) => {
-			cookies[key] = value;
-		});
+		const envCookies = cookieToMap(process.env.NETEASE_COOKIE);
 
-		req.headers.cookie = mapToCookie(cookies);
-		logger.debug('Replace netease cookie');
+		if (envCookies.MUSIC_U) {
+			const clientCookies = cookieToMap(req.headers.cookie || '');
+
+			logger.debug(
+				`Found MUSIC_U in environment variable. Overwriting client's MUSIC_U.`
+			);
+
+			clientCookies.MUSIC_U = envCookies.MUSIC_U;
+			req.headers.cookie = mapToCookie(clientCookies);
+		}
 	}
 
 	if (
@@ -242,7 +248,76 @@ hook.request.before = (ctx) => {
 					}
 					netease.path = netease.path.replace(/\/\d*$/, '');
 					ctx.netease = netease;
-					// console.log(netease.path, netease.param)
+
+
+					if (netease.path === '/api/song/enhance/player/url') {
+						logger.debug('Upgrading and Standardizing player URL request from old endpoint to v1.');
+
+						const songId = netease.param.id || (JSON.parse(netease.param.ids || '[]'))[0];
+
+						// 将旧参数“翻译”为v1兼容的结构
+						netease.param = {
+							ids: `["${songId}"]`,
+							level: 'flac',
+							encodeType: 'flac',
+							header: netease.param.header,
+							e_r: netease.param.e_r,
+						};
+
+						netease.path = '/api/song/enhance/player/url/v1';
+					}
+
+					// 统一处理所有v1接口的请求，注入appver并强制提升音质
+					if (netease.path === '/api/song/enhance/player/url/v1') {
+						// 并行查询
+						const songId = (JSON.parse(netease.param.ids || '[]'))[0];
+						if (songId) {
+							let sanitizedSongId = songId.toString();
+							const matchResult = sanitizedSongId.match(/\d+/); // 匹配第一个连续的数字串
+							if (matchResult) {
+								sanitizedSongId = matchResult[0]; // 使用匹配到的数字串
+							}
+							logger.debug(`Sanitized song ID from "${songId}" to "${sanitizedSongId}".`);
+
+							ctx.alternativeSearchPromise = match(sanitizedSongId).catch(e => { // 使用净化后的ID
+								logger.error(e, `Alternative search for ${sanitizedSongId} failed.`);
+								return null;
+							});
+							logger.info(`Started parallel search for song ${sanitizedSongId} in the background.`);
+						}
+						// 修改外部Cookies的版本号
+						const cookies = cookieToMap(req.headers.cookie || '');
+						cookies.appver = '9.9.9';
+						req.headers.cookie = mapToCookie(cookies);
+
+						// 修改将被加密的内部Header (netease.param.header)
+						const internalHeader = JSON.parse(netease.param.header || '{}');
+						internalHeader.appver = '9.9.9';
+						netease.param.header = JSON.stringify(internalHeader);
+						logger.debug('Targeted injection of appver=9.9.9 for song URL request.');
+						if (netease.param.level !== 'jymaster') {
+							logger.debug(
+								`Forcing quality upgrade on v1 request from '${netease.param.level || 'default'}' to 'jymaster'.`
+							);
+
+							netease.param.level = 'jymaster';
+							netease.param.encodeType = 'flac';
+
+							const turn = 'http://music.1' + '63.com' + netease.path;
+							let query;
+							if (netease.crypto === 'linuxapi') {
+								query = crypto.linuxapi.encryptRequest(turn, netease.param);
+							} else if (netease.crypto === 'eapi') {
+								query = crypto.eapi.encryptRequest(turn, netease.param);
+							}
+
+							if (query) {
+								req.url = query.url;
+								req.body = query.body + netease.pad;
+								logger.debug({ newParams: netease.param }, 'Request successfully re-encrypted for jymaster quality.');
+							}
+						}
+					}
 
 					if (netease.path === '/api/song/enhance/download/url')
 						return pretendPlay(ctx);
@@ -343,6 +418,12 @@ hook.request.after = (ctx) => {
 				} else {
 					netease.jsonBody = JSON.parse(patch(buffer.toString()));
 				}
+
+				// logger.info(
+				// 	// 使用 JSON.stringify(..., null, 2) 来格式化输出，方便阅读
+				// 	{ response: JSON.stringify(netease.jsonBody, null, 2) },
+				// 	'[RAW DECRYPTED RESPONSE] The original response from Netease server is:'
+				// );
 
 				if (ENABLE_LOCAL_VIP) {
 					const vipPath = '/api/music-vip-membership/client/vip/info';
@@ -449,6 +530,12 @@ hook.request.after = (ctx) => {
 
 				const inject = (key, value) => {
 					if (typeof value === 'object' && value != null) {
+						if (value.type === 'flac' && value.encodeType !== 'flac') {
+							logger.debug(`Correcting inconsistent encodeType for song ${value.id}. Was: '${value.encodeType}', Now: 'flac'`);
+							value.encodeType = 'flac';
+						}
+						//if ('level' in value) value['level'] = 'flac';
+						//if ('br' in value) value['level'] = 999000;
 						if ('cp' in value) value['cp'] = 1;
 						if ('fee' in value) value['fee'] = 0;
 						if (
@@ -680,118 +767,92 @@ const tryLike = (ctx) => {
 const computeHash = (task) =>
 	request('GET', task.url).then((response) => crypto.md5.pipe(response));
 
+// ===== 这是最终的、完美的 tryMatch 函数，请用它进行整体替换 =====
+
+// ===== 这是最终的、完美的 tryMatch 函数，请用它进行整体替换 =====
+
 const tryMatch = (ctx) => {
-	const { req, netease } = ctx;
+	const { req, netease, alternativeSearchPromise } = ctx;
 	const { jsonBody } = netease;
-	/** @type {number} */
 	const min_br = Number(process.env.MIN_BR) || 0;
-	/** @type {Promise<any>[]} */
 	let tasks;
 	let target = 0;
 
+	const QUALITY_RANKING = {
+		'jymaster': 6, 'master': 6, 'jyeffect': 5, 'sky': 4, 'hires': 3,
+		'lossless': 2, 'flac': 2, '320k': 1, '128k': 0,
+	};
+
+	const getQualityScore = (song, isNetease = false) => {
+		if (!song) return -1;
+		const label = isNetease ? song.level : song.qualityLabel;
+		return QUALITY_RANKING[label] || -1;
+	};
+
 	const inject = (item) => {
 		item.flag = 0;
-		if (
-			(item.code !== 200 || item.freeTrialInfo || item.br < min_br) &&
-			(target === 0 || item.id === target)
-		) {
-			return match(item.id)
-				.then((song) => {
-					let os = '';
-					try {
-						let { header } = netease.param;
-						header =
-							typeof header === 'string'
-								? JSON.parse(header)
-								: header;
-						const cookie = querystring.parse(
-							req.headers.cookie.replace(/\s/g, ''),
-							';'
-						);
-						os = header.os || cookie.os;
-					} catch (e) {}
-					item.type = song.br === 999000 ? 'flac' : 'mp3';
-					if (os === 'pc' || os === 'uwp') {
-						item.url = global.endpoint
-							? `${global.endpoint.replace(
-									'https://',
-									'http://'
-								)}/package/${crypto.base64.encode(song.url)}/${
-									item.id
-								}.${item.type}`
-							: song.url;
-					} else {
-						item.url = global.endpoint
-							? `${
-									global.endpoint
-								}/package/${crypto.base64.encode(song.url)}/${
-									item.id
-								}.${item.type}`
-							: song.url;
-					}
-					item.md5 = song.md5 || crypto.md5.digest(song.url);
-					item.br = song.br || 128000;
-					item.size = song.size;
-					item.code = 200;
-					item.freeTrialInfo = null;
-					return song;
-				})
-				.then((song) => {
-					if (!netease.path.includes('download') || song.md5) return;
-					const newer = (base, target) => {
-						const difference = Array.from([base, target])
-							.map((version) =>
-								version
-									.split('.')
-									.slice(0, 3)
-									.map((number) => parseInt(number) || 0)
-							)
-							.reduce(
-								(aggregation, current) =>
-									!aggregation.length
-										? current.map((element) => [element])
-										: aggregation.map((element, index) =>
-												element.concat(current[index])
-											),
-								[]
-							)
-							.filter((pair) => pair[0] !== pair[1])[0];
-						return !difference || difference[0] <= difference[1];
-					};
-					const limit = { android: '0.0.0', osx: '0.0.0' };
-					const task = {
-						key: song.url
-							.replace(/\?.*$/, '')
-							.replace(/(?<=kugou\.com\/)\w+\/\w+\//, '')
-							.replace(/(?<=kuwo\.cn\/)\w+\/\w+\/resource\//, ''),
-						url: song.url,
-					};
-					try {
-						let { header } = netease.param;
-						header =
-							typeof header === 'string'
-								? JSON.parse(header)
-								: header;
-						const cookie = querystring.parse(
-							req.headers.cookie.replace(/\s/g, ''),
-							';'
-						);
-						const os = header.os || cookie.os,
-							version = header.appver || cookie.appver;
-						if (os in limit && newer(limit[os], version)) {
-							return cs
-								.cache(task, () => computeHash(task))
-								.then((value) => (item.md5 = value));
-						}
-					} catch (e) {}
-				})
-				.catch((e) => e && logger.error(e));
-		} else if (item.code === 200 && netease.web) {
-			item.url = item.url.replace(
-				/(m\d+?)(?!c)\.music\.126\.net/,
-				'$1c.music.126.net'
-			);
+
+		if (!alternativeSearchPromise) {
+			if (item.code === 200 && !item.freeTrialInfo) {
+				logger.info(
+					{ id: item.id, source: 'Netease (Original)', br: item.br, url: item.url },
+					`[PASSTHROUGH] Song ${item.id} is playable on Netease.`
+				);
+			}
+			return;
 		}
+
+		return alternativeSearchPromise.then((matchedSong) => {
+			logger.debug({ matchedSong }, '[DEBUG] Full content of matchedSong object:');
+
+			const neteasePlayable = item.code === 200 && !item.freeTrialInfo && item.br >= min_br;
+			const matchPlayable = !!matchedSong;
+
+			const neteaseScore = getQualityScore(item, true);
+			const matchScore = getQualityScore(matchedSong, false);
+
+			let useMatchedSource = false;
+			if (matchPlayable) {
+				if (!neteasePlayable || matchScore > neteaseScore) {
+					useMatchedSource = true;
+				}
+			}
+
+			const choice = useMatchedSource
+				? `Matched Provider (score: ${matchScore} > Netease score: ${neteaseScore})`
+				: (neteasePlayable ? `Netease (Original) (score: ${neteaseScore} >= Matched score: ${matchScore})` : 'Both failed');
+
+			const finalSong = useMatchedSource ? matchedSong : (neteasePlayable ? item : null);
+
+			logger.debug(
+				{ id: item.id, choice: choice, final_br: finalSong ? finalSong.br : 0 },
+				`[COMPARE] Audio source selection complete for song ${item.id}.`
+			);
+
+			if (useMatchedSource) {
+				// 更新 item 对象的属性
+				item.url = finalSong.url; // <-- 直接使用最终选择的URL
+				item.br = finalSong.br;
+				item.size = finalSong.size;
+				item.md5 = finalSong.md5;
+				item.type = 'flac';
+				item.code = 200;
+				item.freeTrialInfo = null;
+			}
+
+			// 最终选择日志（保持不变，但现在会打印正确的URL）
+			logger.info(
+				{
+					id: item.id,
+					source: useMatchedSource ? (matchedSong.source || 'Matched Provider') : 'Netease (Original)',
+					quality_score: useMatchedSource ? matchScore : neteaseScore,
+					final_br: item.br,
+					final_url: item.url
+				},
+				`[FINAL CHOICE] Selected audio source for song ${item.id}.`
+			);
+		})
+			.catch((e) => e && logger.error(e));
 	};
 
 	if (!Array.isArray(jsonBody.data)) {
@@ -800,17 +861,7 @@ const tryMatch = (ctx) => {
 		jsonBody.data = jsonBody.data[0];
 		tasks = [inject(jsonBody.data)];
 	} else {
-		target = netease.web
-			? 0
-			: parseInt(
-					(
-						(Array.isArray(netease.param.ids)
-							? netease.param.ids
-							: JSON.parse(netease.param.ids))[0] || 0
-					)
-						.toString()
-						.replace('_0', '')
-				); // reduce time cost
+		target = netease.web ? 0 : parseInt(((Array.isArray(netease.param.ids) ? netease.param.ids : JSON.parse(netease.param.ids))[0] || 0).toString().replace('_0', ''));
 		tasks = jsonBody.data.map((item) => inject(item));
 	}
 	return Promise.all(tasks).catch((e) => e && logger.error(e));

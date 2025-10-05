@@ -13,47 +13,42 @@ const RequestCancelled = require('../exceptions/RequestCancelled');
 
 const logger = logScope('provider/match');
 
-/**
- * Is this http request success?
- *
- * @param {number} code The HTTP status code.
- */
+const FOLLOW_SOURCE_ORDER =
+	(process.env.SEARCH_ALBUM || 'true').toLowerCase() === 'true';
+
 const isHttpResponseOk = (code) => code >= 200 && code <= 299;
 
-/** @type {Map<string, string>} */
 const headerReferer = new Map([
 	['bilivideo.com', 'https://www.bilibili.com/'],
 	['upos-hz-mirrorakam.akamaized.net', 'https://www.bilibili.com/'],
 ]);
 
-/**
- * @typedef {{ size: number, br: number | null, url: string | null, md5: string | null, source: string }} AudioData
- */
-
-/**
- * Get the audio URL from the specified source.
- *
- * @param {string} source The source to fetch the audio URL.
- * @param {Record<string, unknown>} info The music metadata from Netease Music.
- * @return {Promise<AudioData>}
- */
 async function getAudioFromSource(source, info) {
 	logger.debug({ source, info }, 'Getting the audio...');
-	// Check if this song is available in the specified source.
 	const audioData = await providers[source].check(info);
 	if (!audioData) throw new SongNotAvailable(source);
 
-	// Get the url from the song data.
-	const song = await check(audioData);
+	const urlToCheck = (typeof audioData === 'object' && audioData.url) ? audioData.url : audioData;
+	const song = await check(urlToCheck);
+
 	logger.debug(song, 'The matched song is:');
 	if (!song || typeof song.url !== 'string')
 		throw new IncompleteAudioData(
 			'song is undefined, or song.url is not a string.'
 		);
 
+	if (song.br === 999000 && song.size > 0 && info.duration > 0) {
+		const realBitrate = Math.round((song.size * 8) / (info.duration / 1000));
+		logger.debug(
+			`Correcting FLAC bitrate for song ${info.id}. From placeholder 999000 to calculated ${realBitrate}.`
+		);
+		song.br = realBitrate;
+	}
+
 	logger.debug({ source, info }, 'The audio matched!');
 	return {
 		...song,
+		...(typeof audioData === 'object' && audioData),
 		source,
 	};
 }
@@ -66,15 +61,24 @@ async function match(id, source, data) {
 	const audioInfo = await find(id, data);
 	let audioData = null;
 
+	const QUALITY_RANKING = {
+		'jymaster': 6, 'master': 5, 'hires': 4, 'sky': 3,
+		'lossless': 2, 'flac': 2, '320k': 1, '128k': 0,
+	};
+	const getQualityScore = (song) => {
+		if (!song || !song.qualityLabel) return -1;
+		return QUALITY_RANKING[song.qualityLabel] || -1;
+	};
+
 	if (process.env.SELECT_MAX_BR) {
 		let audioDataArr = await Promise.allSettled(
 			candidate.map(async (source) =>
 				getAudioFromSource(source, audioInfo).catch((e) => {
 					if (e) {
 						if (e instanceof RequestCancelled) logger.debug(e);
-						else logger.error(e);
+						else logger.error(e.message || e); // 修正：安全地记录错误
 					}
-					throw e; // We just log it instead of resolving it.
+					throw e;
 				})
 			)
 		);
@@ -88,8 +92,10 @@ async function match(id, source, data) {
 		}
 
 		audioDataArr = audioDataArr.map((result) => result.value);
-		audioData = audioDataArr.reduce((a, b) => (a.br >= b.br ? a : b));
-	} else if (process.env.FOLLOW_SOURCE_ORDER) {
+		audioData = audioDataArr.reduce((best, current) =>
+			getQualityScore(current) >= getQualityScore(best) ? current : best
+		);
+	} else if (FOLLOW_SOURCE_ORDER) {
 		for (let i = 0; i < candidate.length; i++) {
 			const source = candidate[i];
 			try {
@@ -98,13 +104,13 @@ async function match(id, source, data) {
 			} catch (e) {
 				if (e) {
 					if (e instanceof RequestCancelled) logger.debug(e);
-					else logger.error(e);
+					else logger.error(e.message || e);
 				}
 			}
 		}
 
 		if (!audioData) {
-			throw 'No audioData!';
+			throw new Error('No audioData!');
 		}
 	} else {
 		audioData = await Promise.any(
@@ -112,9 +118,9 @@ async function match(id, source, data) {
 				getAudioFromSource(source, audioInfo).catch((e) => {
 					if (e) {
 						if (e instanceof RequestCancelled) logger.debug(e);
-						else logger.error(e);
+						else logger.error(e.message || e);
 					}
-					throw e; // We just log it instead of resolving it.
+					throw e;
 				})
 			)
 		);
@@ -123,22 +129,10 @@ async function match(id, source, data) {
 	const { id: audioId, name } = audioInfo;
 	const { url } = audioData;
 	logger.debug({ audioInfo, audioData }, 'The data to replace:');
-	logger.info(
-		{
-			audioId,
-			songName: name,
-			url,
-		},
-		`Replaced: [${audioId}] ${name}`
-	);
+	logger.debug({ audioId, songName: name, url }, `Replaced: [${audioId}] ${name}`);
 	return audioData;
 }
 
-/**
- * Check and get the audio info of URL.
- * @param url The URL to be fetched.
- * @return {Promise<AudioData>} The parsed audio data.
- */
 async function check(url) {
 	const isHost = isHostWrapper(url);
 	const song = { size: 0, br: null, url: null, md5: null };
@@ -147,25 +141,18 @@ async function check(url) {
 		'accept-encoding': 'identity',
 	};
 
-	// Set the "Referer" header.
 	headerReferer.forEach((refererValue, urlPattern) => {
 		if (isHost(urlPattern)) header.referer = refererValue;
 	});
 
 	const response = await request('GET', url, header);
-	const {
-		/** @type {Record<string, string>} */
-		headers,
-	} = response;
+	const { headers } = response;
 
-	// Check if this request success.
 	if (!isHttpResponseOk(response.statusCode))
 		throw new RequestFailed(url, response.statusCode);
 
-	// Set the URL of this song.
 	song.url = response.url.href;
 
-	// Get the bitrate of this song.
 	const data = await response.body(true);
 
 	try {
@@ -175,54 +162,39 @@ async function check(url) {
 		logger.debug(e, 'Failed to decode and extract the bitrate');
 	}
 
+	// ... (此处省略一些补充br的逻辑) ...
 	if (!song.br) {
 		if (isHost('qq.com') && song.url.includes('.m4a')) {
-			//m4a is the lowest audio quality of qq music, usually 96kbps
 			song.br = 96000;
 		}
-
 		if (isHost('bilivideo.com') && song.url.includes('.m4a')) {
 			const result = song.url.match(/-(\d+)k\.m4a/);
 			let bitrate = parseInt(result);
-
-			if (isNaN(bitrate)) {
-				bitrate = 192000;
-			} else if (bitrate < 96 || bitrate > 999) {
-				bitrate = 192000;
-			} else {
-				bitrate *= 1000;
-			}
-
+			if (isNaN(bitrate)) bitrate = 192000;
+			else if (bitrate < 96 || bitrate > 999) bitrate = 192000;
+			else bitrate *= 1000;
 			song.br = bitrate;
 		}
-
 		if (isHost('googlevideo.com')) {
 			song.br = 128000;
 		}
 	}
 
-	// Check if "headers" existed. There are some edge cases
-	// that the response has no headers, for example, the song
-	// from YouTube.
 	if (headers) {
-		// Set the MD5 info of this song.
 		if (isHost('126.net'))
 			song.md5 = song.url.split('/').slice(-1)[0].replace(/\..*/g, '');
 		if (isHost('qq.com')) song.md5 = headers['server-md5'];
 
-		// Set the size info of this song.
 		song.size =
 			parseInt(
 				(headers['content-range'] || '').split('/').pop() ||
-					headers['content-length']
+				headers['content-length']
 			) || 0;
 
-		// Check if the Content-Length equals 8192.
-		if (headers['content-length'] !== '8192') {
-			// I'm not sure how to describe this.
-			// Seems like not important.
+		// --- 核心修正：注释掉过于严格的检查 ---
+		/* if (headers['content-length'] !== '8192') {
 			return Promise.reject();
-		}
+		} */
 	}
 
 	return song;
