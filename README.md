@@ -46,7 +46,7 @@ npx -p @unblockneteasemusic/server unblockneteasemusic
 
 #### 配置
 
-http 代理使用 `127.0.0.1`，端口默认使用 `8080`。
+http 代理使用 `127.0.0.1`，端口默认使用 `8081`。
 
 如果想要添加启动参数和环境变量，请在项目根目录中的 `nw.js` 中配置 `scriptOptions` 和 `env`。
 
@@ -162,25 +162,25 @@ optional arguments:
 将有兴趣的音源代号用 `-o` 传入 UNM 即可使用，像这样：
 
 ```bash
-node app.js -o bilibili ytdlp
+node app.js -o qq
 ```
 
-| 名称                        | 代号        | 默认启用 | 注意事项                                                                       |
-| --------------------------- | ----------- | -------- | ------------------------------------------------------------------------------ |
-| QQ 音乐                     | `qq`        |          | 需要准备自己的 `QQ_COOKIE`（请参阅下方〈环境变量〉处）。必须使用 QQ 登录。     |
-| 酷狗音乐                    | `kugou`     | ✅       |                                                                                |
-| 酷我音乐                    | `kuwo`      |          |                                                                                |
-| 波点音乐                    | `bodian`    | ✅       |                                                                                |
-| 咪咕音乐                    | `migu`      | ✅       | 需要准备自己的 `MIGU_COOKIE`（请参阅下方〈环境变量〉处）。                     |
-| JOOX                        | `joox`      |          | 需要准备自己的 `JOOX_COOKIE`（请参阅下方〈环境变量〉处）。似乎有严格地区限制。 |
-| YouTube（纯 JS 解析方式）   | `youtube`   |          | 需要 Google 认定的**非中国大陆区域** IP 地址。                                 |
-| YouTube（通过 `youtube-dl`) | `youtubedl` |          | 需要自行安装 `youtube-dl`。                                                    |
-| YouTube（通过 `yt-dlp`)     | `ytdlp`     | ✅       | 需要自行安装 `yt-dlp`（`youtube-dl` 仍在活跃维护的 fork）。                    |
-| B 站音乐                    | `bilibili`  |          |                                                                                |
-| B 站音乐                    | `bilivideo` |          | 在大陆地区外的IP地址可能查询不到某些版权视频（如索尼音乐上传的MV等）           |
-| 第三方网易云 API            | `pyncmd`    |          |                                                                                |
+---
 
-- 支持 `pyncmd` 的 API 服务由 GD studio <https://music.gdstudio.xyz> 提供。
+| 名称                        | 代号        | 注意事项                                                                       |
+| --------------------------- | ----------- | ------------------------------------------------------------------------------ |
+| QQ 音乐                     | `qq`        |      |
+| 酷狗音乐                    | `kugou`     |                                                                                |
+| 酷我音乐                    | `kuwo`      |                                                                                |
+| 波点音乐                    | `bodian`    |                                                                                |
+| 咪咕音乐                    | `migu`      |                      |
+| JOOX                        | `joox`      |  |
+| B 站音乐                    | `bilibili`  |                                                                                |
+| B 站音乐                    | `bilivideo` | 在大陆地区外的IP地址可能查询不到某些版权视频（如索尼音乐上传的MV等）           |
+| 第三方网易云 API            | `pyncmd`    |                                                                                |
+
+---
+
 
 ### 环境变量
 
@@ -235,66 +235,83 @@ node app.js -o bilibili ytdlp
 checknetisolation loopbackexempt -a -n="1F8B0F94.122165AE053F_j2p0p5q0044a6"
 ```
 
-### 方法 1. 修改 hosts
+### clash代理配置
+```yaml
+proxies:
+  - {name: "服务端解锁", type: http, server: your-server-ip, port: }
+  - {name: "本地解锁", type: http, server: 127.0.0.1, port: }
 
-向 hosts 文件添加几条规则
+proxy-groups:
+- name: 🎶 网易音乐
+  type: select
+  proxies:
+    - DIRECT
+    - "服务端解锁"
+    - "本地解锁"
 
-```hosts
-<Server IP> music.163.com
-<Server IP> interface.music.163.com
-<Server IP> interface3.music.163.com
-<Server IP> interface.music.163.com.163jiasu.com
-<Server IP> interface3.music.163.com.163jiasu.com
+rules:
+  - DOMAIN,music.163.com,🎶 网易音乐
+  - DOMAIN,interface.music.163.com,🎶 网易音乐
+  - DOMAIN,interface3.music.163.com,🎶 网易音乐
+  - DOMAIN,apm.music.163.com,🎶 网易音乐
+  - DOMAIN,apm3.music.163.com,🎶 网易音乐
+  - DOMAIN,interface.music.163.com.163jiasu.com,🎶 网易音乐
+  - DOMAIN,interface3.music.163.com.163jiasu.com,🎶 网易音乐
+  - IP-CIDR,39.105.63.80/32,🎶 网易音乐
+  - IP-CIDR,39.105.175.128/32,🎶 网易音乐
+  - IP-CIDR,45.127.129.53/32,🎶 网易音乐
+  - IP-CIDR,45.254.48.1/32,🎶 网易音乐
+  - IP-CIDR,45.254.49.50/32,🎶 网易音乐
+  - IP-CIDR,47.100.127.239/32,🎶 网易音乐
+  - IP-CIDR,59.111.19.33/32,🎶 网易音乐
+  - IP-CIDR,59.111.19.97/32,🎶 网易音乐
+  - IP-CIDR,59.111.19.99/32,🎶 网易音乐
+  - IP-CIDR,59.111.21.14/31,🎶 网易音乐
+  - IP-CIDR,59.111.160.195/32,🎶 网易音乐
+  - IP-CIDR,59.111.160.197/32,🎶 网易音乐
+  - IP-CIDR,59.111.179.213/32,🎶 网易音乐
+  - IP-CIDR,59.111.179.214/32,🎶 网易音乐
+  - IP-CIDR,59.111.181.35/32,🎶 网易音乐
+  - IP-CIDR,59.111.181.38/32,🎶 网易音乐
+  - IP-CIDR,59.111.181.60/32,🎶 网易音乐
+  - IP-CIDR,59.111.238.29/32,🎶 网易音乐
+  - IP-CIDR,59.111.239.33/32,🎶 网易音乐
+  - IP-CIDR,59.111.239.61/32,🎶 网易音乐
+  - IP-CIDR,101.71.154.241/32,🎶 网易音乐
+  - IP-CIDR,103.126.92.132/32,🎶 网易音乐
+  - IP-CIDR,103.126.92.133/32,🎶 网易音乐
+  - IP-CIDR,112.13.119.17/32,🎶 网易音乐
+  - IP-CIDR,112.13.122.1/32,🎶 网易音乐
+  - IP-CIDR,115.236.113.65/32,🎶 网易音乐
+  - IP-CIDR,115.236.118.33/32,🎶 网易音乐
+  - IP-CIDR,115.236.121.51/32,🎶 网易音乐
+  - IP-CIDR,115.236.121.195/32,🎶 网易音乐
+  - IP-CIDR,115.238.119.68/32,🎶 网易音乐
+  - IP-CIDR,118.24.63.156/32,🎶 网易音乐
+  - IP-CIDR,182.92.170.253/32,🎶 网易音乐
+  - IP-CIDR,182.242.61.28/32,🎶 网易音乐
+  - IP-CIDR,182.242.61.37/32,🎶 网易音乐
+  - IP-CIDR,182.242.61.38/32,🎶 网易音乐
+  - IP-CIDR,193.112.159.225/32,🎶 网易音乐
+  - IP-CIDR,223.252.196.40/32,🎶 网易音乐
+  - IP-CIDR,223.252.199.66/32,🎶 网易音乐
+  - IP-CIDR,223.252.199.67/32,🎶 网易音乐
 ```
 
-> 使用此方法必须监听 80 端口 `-p 80`
->
-> **若在本机运行程序**，请指定网易云服务器 IP `-f xxx.xxx.xxx.xxx` (可在修改 hosts 前通过 `ping music.163.com` 获得) **或** 使用代理 `-u http(s)://xxx.xxx.xxx.xxx:xxx`，以防请求死循环
->
-> **Android 客户端下修改 hosts 无法直接使用**，原因和解决方法详见[云音乐安卓又搞事啦](https://jixun.moe/post/netease-android-hosts-bypass/)，[安卓免 root 绕过网易云音乐 IP 限制](https://jixun.moe/post/android-block-netease-without-root/)
 
-### 方法 2. 设置代理
-
-PAC 自动代理脚本地址 `http://<Server Name:PORT>/proxy.pac`
-
-全局代理地址填写服务器地址和端口号即可
-
-| 平台    | 基础设置                              |
-| :------ | :------------------------------------ |
-| Windows | 设置 > 工具 > 自定义代理 (客户端内)   |
-| UWP     | Windows 设置 > 网络和 Internet > 代理 |
-| Linux   | 系统设置 > 网络 > 网络代理            |
-| macOS   | 系统偏好设置 > 网络 > 高级 > 代理     |
-| Android | WLAN > 修改网络 > 高级选项 > 代理     |
-| iOS     | 无线局域网 > HTTP 代理 > 配置代理     |
-
-> 代理工具和方法有很多请自行探索，欢迎在 issues 讨论
-
-### ✳ 方法 3. 调用接口
-
-作为依赖库使用
-
-```javascript
-const match = require('@unblockneteasemusic/server');
-
-/**
- * Set proxy or hosts if needed
- */
-global.proxy = require('url').parse('http://127.0.0.1:1080');
-global.hosts = { 'i.y.qq.com': '59.37.96.220' };
-
-/**
- * Find matching song from other platforms
- * @param {Number} id netease song id
- * @param {Array<String>||undefined} source support qq, xiami, baidu, kugou, kuwo, migu, joox
- * @return {Promise<Object>}
- */
-match(418602084, ['qq', 'kuwo', 'migu']).then(console.log);
+### ios小火箭
+```txt
+USER-AGENT,NeteaseMusic*,服务器解锁
+DOMAIN-SUFFIX,music.163.com,服务器解锁
+DOMAIN-SUFFIX,api.iplay.163.com,服务器解锁
+DOMAIN-SUFFIX,mam.netease.com,服务器解锁
+DOMAIN-SUFFIX,hz.netease.com,服务器解锁
+DOMAIN-SUFFIX,music.126.net,DIRECT
 ```
 
-### 設定 HTTPS 憑證
+### 设定 HTTPS 凭证
 
-新版的 NeteaseMusic 需要 HTTPS 才能使用。证书的设置教学可参阅[《安裝 UNM 的 HTTPS 憑證》](https://github.com/UnblockNeteaseMusic/server/discussions/426)一文。
+新版的 NeteaseMusic 需要 HTTPS 才能使用。证书的设置教学可参阅[《安裝 UNM 的 HTTPS 凭证》](https://github.com/UnblockNeteaseMusic/server/discussions/426)一文。
 
 ## 效果
 
