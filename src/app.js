@@ -46,7 +46,7 @@ const config = require('./cli.js')
 	.parse(process.argv);
 
 global.address = config.address;
-config.port = (config.port || '8080:8081')
+config.port = (config.port || '8081:8082')
 	.split(':')
 	.map((string) => parseInt(string));
 const invalid = (value) => isNaN(value) || value < 1 || value > 65535;
@@ -101,6 +101,9 @@ global.hosts = target.reduce(
 	{}
 );
 server.whitelist = [
+    // 放行 Clash 延迟测试等常用域名
+    '://[\\w.]*gstatic\\.com',
+	// 网易云
 	'://[\\w.]*music\\.126\\.net',
 	'://[\\w.]*vod\\.126\\.net',
 	'://acstatic-dun.126.net',
