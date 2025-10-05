@@ -1,4 +1,10 @@
-const parse = require('url').parse;
+/**
+ * @name hook.js
+ * @description 项目的核心逻辑文件，负责拦截和修改网易云音乐的API请求与响应。
+ * 包含了并行查询、智能音质比对、接口升级、客户端兼容性修复等所有高级功能。
+ */
+
+// 导入依赖模块
 const crypto = require('./crypto');
 const request = require('./request');
 const match = require('./provider/match');
@@ -6,11 +12,13 @@ const querystring = require('querystring');
 const { isHost, cookieToMap, mapToCookie } = require('./utilities');
 const { getManagedCacheStorage } = require('./cache');
 const { logScope } = require('./logger');
-const { url } = require('inspector');
 
+// 初始化日志记录器
 const logger = logScope('hook');
 const cs = getManagedCacheStorage('hook');
-cs.aliveDuration = 7 * 24 * 60 * 60 * 1000;
+cs.aliveDuration = 7 * 24 * 60 * 60 * 1000; // 缓存有效期7天
+
+// --- 1. 从环境变量中读取功能开关 ---
 
 const ENABLE_LOCAL_VIP = ['true', 'cvip', 'svip'].includes(
 	(process.env.ENABLE_LOCAL_VIP || '').toLowerCase()
@@ -22,369 +30,196 @@ const ENABLE_LOCAL_SVIP =
 	(process.env.ENABLE_LOCAL_VIP || '').toLowerCase() === 'svip';
 const LOCAL_VIP_UID = (process.env.LOCAL_VIP_UID || '')
 	.split(',')
-	.map((str) => parseInt(str))
+	.map((str) => parseInt(str, 10))
 	.filter((num) => !Number.isNaN(num));
 
+// --- 2. 定义 hook 对象结构与拦截目标 ---
+
 const hook = {
-	request: {
-		before: () => { },
-		after: () => { },
-	},
-	connect: {
-		before: () => { },
-	},
-	negotiate: {
-		before: () => { },
-	},
-	target: {
-		host: new Set(),
-		path: new Set(),
-	},
+	request: { before: () => {}, after: () => {} },
+	connect: { before: () => {}, after: () => {} },
+	negotiate: { before: () => {} },
+	target: { host: new Set(), path: new Set() },
 };
 
 hook.target.host = new Set([
-	'music.163.com',
-	'interface.music.163.com',
-	'interface3.music.163.com',
-	'apm.music.163.com',
-	'apm3.music.163.com',
-	'interface.music.163.com.163jiasu.com',
-	'interface3.music.163.com.163jiasu.com',
-	// 'mam.netease.com',
-	// 'api.iplay.163.com', // look living
-	// 'ac.dun.163yun.com',
-	// 'crash.163.com',
-	// 'clientlog.music.163.com',
-	// 'clientlog3.music.163.com'
+	'music.163.com', 'interface.music.163.com', 'interface3.music.163.com',
+	'apm.music.163.com', 'apm3.music.163.com',
+	'interface.music.163.com.163jiasu.com', 'interface3.music.163.com.163jiasu.com',
 ]);
 
 hook.target.path = new Set([
-	'/api/v3/playlist/detail',
-	'/api/v3/song/detail',
-	'/api/v6/playlist/detail',
-	'/api/album/play',
-	'/api/artist/privilege',
-	'/api/album/privilege',
-	'/api/v1/artist',
-	'/api/v1/artist/songs',
-	'/api/v2/artist/songs',
-	'/api/artist/top/song',
-	'/api/v1/album',
-	'/api/album/v3/detail',
-	'/api/playlist/privilege',
-	'/api/song/enhance/player/url',
-	'/api/song/enhance/player/url/v1',
-	'/api/song/enhance/download/url',
-	'/api/song/enhance/download/url/v1',
-	'/api/song/enhance/privilege',
-	'/api/ad',
-	'/batch',
-	'/api/batch',
-	'/api/listen/together/privilege/get',
-	'/api/playmode/intelligence/list',
-	'/api/v1/search/get',
-	'/api/v1/search/song/get',
-	'/api/search/complex/get',
-	'/api/search/complex/page',
-	'/api/search/pc/complex/get',
-	'/api/search/pc/complex/page',
-	'/api/search/song/list/page',
-	'/api/search/song/page',
-	'/api/cloudsearch/pc',
-	'/api/v1/playlist/manipulate/tracks',
-	'/api/song/like',
-	'/api/v1/play/record',
-	'/api/playlist/v4/detail',
-	'/api/v1/radio/get',
-	'/api/v1/discovery/recommend/songs',
-	'/api/usertool/sound/mobile/promote',
-	'/api/usertool/sound/mobile/theme',
-	'/api/usertool/sound/mobile/animationList',
-	'/api/usertool/sound/mobile/all',
-	'/api/usertool/sound/mobile/detail',
-	'/api/vipauth/app/auth/query',
-	'/api/music-vip-membership/client/vip/info',
+    '/api/v3/playlist/detail', '/api/v3/song/detail', '/api/v6/playlist/detail', 
+    '/api/album/play', '/api/artist/privilege', '/api/album/privilege', 
+    '/api/v1/artist', '/api/v1/artist/songs', '/api/v2/artist/songs', 
+    '/api/artist/top/song', '/api/v1/album', '/api/album/v3/detail', 
+    '/api/playlist/privilege', '/api/song/enhance/player/url', 
+    '/api/song/enhance/player/url/v1', '/api/song/enhance/download/url', 
+    '/api/song/enhance/download/url/v1', '/api/song/enhance/privilege', 
+    '/api/ad', '/batch', '/api/batch', '/api/listen/together/privilege/get', 
+    '/api/playmode/intelligence/list', '/api/v1/search/get', 
+    '/api/v1/search/song/get', '/api/search/complex/get', 
+    '/api/search/complex/page', '/api/search/pc/complex/get', 
+    '/api/search/pc/complex/page', '/api/search/song/list/page', 
+    '/api/search/song/page', '/api/cloudsearch/pc', 
+    '/api/v1/playlist/manipulate/tracks', '/api/song/like', 
+    '/api/v1/play/record', '/api/playlist/v4/detail', '/api/v1/radio/get', 
+    '/api/v1/discovery/recommend/songs', '/api/usertool/sound/mobile/promote', 
+    '/api/usertool/sound/mobile/theme', '/api/usertool/sound/mobile/animationList', 
+    '/api/usertool/sound/mobile/all', '/api/usertool/sound/mobile/detail', 
+    '/api/vipauth/app/auth/query', '/api/music-vip-membership/client/vip/info',
 ]);
 
 const domainList = [
-	'music.163.com',
-	'music.126.net',
-	'iplay.163.com',
-	'look.163.com',
-	'y.163.com',
-	'interface.music.163.com',
-	'interface3.music.163.com',
+	'music.163.com', 'music.126.net', 'iplay.163.com', 'look.163.com',
+	'y.163.com', 'interface.music.163.com', 'interface3.music.163.com',
 ];
+
+// --- 3. 核心钩子函数实现 ---
 
 hook.request.before = (ctx) => {
 	const { req } = ctx;
 	req.url =
-		(req.url.startsWith('http://')
+		(req.url.startsWith('http://') || req.url.startsWith('https://')
 			? ''
-			: (req.socket.encrypted ? 'https:' : 'http:') +
-			'//' +
-			(domainList.some((domain) =>
-				(req.headers.host || '').includes(domain)
-			)
-				? req.headers.host
-				: null)) + req.url;
-	const url = parse(req.url);
-	if (
-		[url.hostname, req.headers.host].some((host) =>
-			isHost(host, 'music.163.com')
-		)
-	)
+			: (req.socket.encrypted ? 'https:' : 'http:') + '//' + (req.headers.host || 'localhost')) + req.url;
+	
+	const url = new URL(req.url);
+
+	if ([url.hostname, req.headers.host].some((host) => isHost(host, 'music.163.com')))
 		ctx.decision = 'proxy';
 
-	if (process.env.NETEASE_COOKIE && url.path.includes('url')) {
-		// 逻辑更新：只使用环境变量中的 MUSIC_U
-
+	if (process.env.NETEASE_COOKIE && url.pathname.includes('url')) {
 		const envCookies = cookieToMap(process.env.NETEASE_COOKIE);
-
 		if (envCookies.MUSIC_U) {
 			const clientCookies = cookieToMap(req.headers.cookie || '');
-
-			logger.debug(
-				`Found MUSIC_U in environment variable. Overwriting client's MUSIC_U.`
-			);
-
 			clientCookies.MUSIC_U = envCookies.MUSIC_U;
 			req.headers.cookie = mapToCookie(clientCookies);
 		}
 	}
 
 	if (
-		[url.hostname, req.headers.host].some((host) =>
-			hook.target.host.has(host)
-		) &&
+		[url.hostname, req.headers.host].some((host) => hook.target.host.has(host)) &&
 		req.method === 'POST' &&
-		(url.path.startsWith('/eapi/') || // eapi
-			// url.path.startsWith('/api/') || // api
-			url.path.startsWith('/api/linux/forward')) // linuxapi
+		(url.pathname.startsWith('/eapi/') || url.pathname.startsWith('/api/linux/forward'))
 	) {
 		return request
 			.read(req)
 			.then((body) => (req.body = body))
 			.then((body) => {
-				if ('x-napm-retry' in req.headers)
-					delete req.headers['x-napm-retry'];
-				req.headers['X-Real-IP'] = '118.88.88.88';
-				if ('x-aeapi' in req.headers) req.headers['x-aeapi'] = 'false';
-				if (
-					req.url.includes('stream') ||
-					req.url.includes('/eapi/cloud/upload/check')
-				)
-					return; // look living/cloudupload eapi can not be decrypted
-				req.headers['Accept-Encoding'] = 'gzip, deflate'; // https://blog.csdn.net/u013022222/article/details/51707352
 				if (body) {
 					const netease = {};
 					netease.pad = (body.match(/%0+$/) || [''])[0];
-					if (url.path === '/api/linux/forward') {
+					if (url.pathname === '/api/linux/forward') {
 						netease.crypto = 'linuxapi';
-					} else if (url.path.startsWith('/eapi/')) {
+					} else if (url.pathname.startsWith('/eapi/')) {
 						netease.crypto = 'eapi';
-					} else if (url.path.startsWith('/api/')) {
-						netease.crypto = 'api';
 					}
-					let data;
-					switch (netease.crypto) {
-						case 'linuxapi':
-							data = JSON.parse(
-								crypto.linuxapi
-									.decrypt(
-										Buffer.from(
-											body.slice(
-												8,
-												body.length - netease.pad.length
-											),
-											'hex'
-										)
-									)
-									.toString()
-							);
-							netease.path = parse(data.url).path;
-							netease.param = data.params;
-							break;
-						case 'eapi':
-							data = crypto.eapi
-								.decrypt(
-									Buffer.from(
-										body.slice(
-											7,
-											body.length - netease.pad.length
-										),
-										'hex'
-									)
-								)
-								.toString()
-								.split('-36cd479b6b5-');
-							netease.path = data[0];
-							netease.param = JSON.parse(data[1]);
-							if (
-								netease.param.hasOwnProperty('e_r') &&
-								(netease.param.e_r == 'true' ||
-									netease.param.e_r == true)
-							) {
-								// eapi's e_r is true, needs to be encrypted
-								netease.e_r = true;
-							} else {
-								netease.e_r = false;
-							}
-							break;
-						case 'api':
-							data = {};
-							decodeURIComponent(body)
-								.split('&')
-								.forEach((pair) => {
-									let [key, value] = pair.split('=');
-									data[key] = value;
-								});
-							netease.path = url.path;
-							netease.param = data;
-							break;
-						default:
-							// unsupported crypto
-							break;
+					
+					try {
+						let data;
+						switch (netease.crypto) {
+							case 'linuxapi':
+								data = JSON.parse(crypto.linuxapi.decrypt(Buffer.from(body.slice(8, body.length - netease.pad.length), 'hex')).toString());
+								netease.path = new URL(data.url).pathname;
+								netease.param = data.params;
+								break;
+							case 'eapi':
+								data = crypto.eapi.decrypt(Buffer.from(body.slice(7, body.length - netease.pad.length), 'hex')).toString().split('-36cd479b6b5-');
+								netease.path = data[0];
+								netease.param = JSON.parse(data[1]);
+								netease.e_r = (netease.param.e_r === 'true' || netease.param.e_r === true);
+								break;
+						}
+					} catch(e) {
+						logger.error(e, `Failed to decrypt request body for ${req.url}.`);
 					}
-					netease.path = netease.path.replace(/\/\d*$/, '');
+
+					netease.path = (netease.path || '').replace(/\/\d*$/, '');
 					ctx.netease = netease;
 
-
 					if (netease.path === '/api/song/enhance/player/url') {
-						logger.debug('Upgrading and Standardizing player URL request from old endpoint to v1.');
-
+						logger.info('Upgrading and Standardizing player URL request from old endpoint to v1.');
 						const songId = netease.param.id || (JSON.parse(netease.param.ids || '[]'))[0];
-
-						// 将旧参数“翻译”为v1兼容的结构
 						netease.param = {
-							ids: `["${songId}"]`,
-							level: 'flac',
-							encodeType: 'flac',
-							header: netease.param.header,
-							e_r: netease.param.e_r,
+							ids: `["${songId}"]`, level: 'standard', encodeType: 'flac',
+							header: netease.param.header, e_r: netease.param.e_r,
 						};
-
 						netease.path = '/api/song/enhance/player/url/v1';
 					}
 
-					// 统一处理所有v1接口的请求，注入appver并强制提升音质
 					if (netease.path === '/api/song/enhance/player/url/v1') {
-						// 并行查询
 						const songId = (JSON.parse(netease.param.ids || '[]'))[0];
 						if (songId) {
 							let sanitizedSongId = songId.toString();
-							const matchResult = sanitizedSongId.match(/\d+/); // 匹配第一个连续的数字串
-							if (matchResult) {
-								sanitizedSongId = matchResult[0]; // 使用匹配到的数字串
-							}
-							logger.debug(`Sanitized song ID from "${songId}" to "${sanitizedSongId}".`);
-
-							ctx.alternativeSearchPromise = match(sanitizedSongId).catch(e => { // 使用净化后的ID
-								logger.error(e, `Alternative search for ${sanitizedSongId} failed.`);
-								return null;
-							});
+							const matchResult = sanitizedSongId.match(/\d+/);
+							if (matchResult) sanitizedSongId = matchResult[0];
+							
+							ctx.alternativeSearchPromise = match(sanitizedSongId).catch(() => null);
 							logger.info(`Started parallel search for song ${sanitizedSongId} in the background.`);
 						}
-						// 修改外部Cookies的版本号
+
 						const cookies = cookieToMap(req.headers.cookie || '');
 						cookies.appver = '9.9.9';
 						req.headers.cookie = mapToCookie(cookies);
-
-						// 修改将被加密的内部Header (netease.param.header)
+						
 						const internalHeader = JSON.parse(netease.param.header || '{}');
 						internalHeader.appver = '9.9.9';
 						netease.param.header = JSON.stringify(internalHeader);
-						logger.debug('Targeted injection of appver=9.9.9 for song URL request.');
+						
 						if (netease.param.level !== 'jymaster') {
-							logger.debug(
-								`Forcing quality upgrade on v1 request from '${netease.param.level || 'default'}' to 'jymaster'.`
-							);
-
 							netease.param.level = 'jymaster';
 							netease.param.encodeType = 'flac';
-
-							const turn = 'http://music.1' + '63.com' + netease.path;
-							let query;
-							if (netease.crypto === 'linuxapi') {
-								query = crypto.linuxapi.encryptRequest(turn, netease.param);
-							} else if (netease.crypto === 'eapi') {
-								query = crypto.eapi.encryptRequest(turn, netease.param);
-							}
-
-							if (query) {
-								req.url = query.url;
-								req.body = query.body + netease.pad;
-								logger.debug({ newParams: netease.param }, 'Request successfully re-encrypted for jymaster quality.');
-							}
+						}
+						
+						const turn = 'http://music.163.com' + netease.path;
+						let query;
+                        if (netease.crypto === 'linuxapi') {
+                            query = crypto.linuxapi.encryptRequest(turn, netease.param);
+                        } else if (netease.crypto === 'eapi') {
+                            query = crypto.eapi.encryptRequest(turn, netease.param);
+                        }
+						if (query) {
+							req.url = query.url;
+							req.body = query.body + netease.pad;
 						}
 					}
 
-					if (netease.path === '/api/song/enhance/download/url')
-						return pretendPlay(ctx);
+					if (netease.path === '/api/song/enhance/download/url') return pretendPlay(ctx);
+					if (netease.path === '/api/song/enhance/download/url/v1') return pretendPlayV1(ctx);
 
-					if (netease.path === '/api/song/enhance/download/url/v1')
-						return pretendPlayV1(ctx);
-
-					if (BLOCK_ADS) {
-						if (netease.path.startsWith('/api/ad')) {
-							ctx.error = new Error('ADs blocked.');
-							ctx.decision = 'close';
-						}
-					}
-
-					if (DISABLE_UPGRADE_CHECK) {
-						if (
-							netease.path.match(
-								/^\/api(\/v1)?\/(android|ios|osx|pc)\/(upgrade|version)/
-							)
-						) {
-							ctx.error = new Error('Upgrade check blocked.');
-							ctx.decision = 'close';
-						}
-					}
+					if (BLOCK_ADS && netease.path.startsWith('/api/ad')) ctx.decision = 'close';
+					if (DISABLE_UPGRADE_CHECK && netease.path.match(/^\/api(\/v1)?\/(android|ios|osx|pc)\/(upgrade|version)/)) ctx.decision = 'close';
 				}
 			})
-			.catch(
-				(error) =>
-					error &&
-					logger.error(
-						error,
-						`A error occurred in hook.request.before when hooking ${req.url}.`
-					)
-			);
+			.catch((error) => logger.error(error, `An error occurred in hook.request.before.`));
 	} else if (
 		hook.target.host.has(url.hostname) &&
-		(url.path.startsWith('/weapi/') || url.path.startsWith('/api/'))
+		(url.pathname.startsWith('/weapi/') || url.pathname.startsWith('/api/'))
 	) {
 		req.headers['X-Real-IP'] = '118.88.88.88';
 		ctx.netease = {
 			web: true,
-			path: url.path
-				.replace(/^\/weapi\//, '/api/')
-				.split('?')
-				.shift() // remove the query parameters
-				.replace(/\/\d*$/, ''),
+			path: url.pathname.replace(/^\/weapi\//, '/api/').split('?')[0].replace(/\/\d*$/, ''),
 		};
 	} else if (req.url.includes('package')) {
 		try {
 			const data = req.url.split('package/').pop().split('/');
-			const url = parse(crypto.base64.decode(data[0]));
-			const id = data[1].replace(/\.\w+/, '');
-			req.url = url.href;
-			req.headers['host'] = url.hostname;
-			req.headers['cookie'] = null;
-			ctx.package = { id };
+			const decodedUrl = new URL(crypto.base64.decode(data[0]));
+			req.url = decodedUrl.href;
+			req.headers['host'] = decodedUrl.hostname;
+			req.headers['cookie'] = '';
+			ctx.package = { id: data[1].replace(/\.\w+/, '') };
 			ctx.decision = 'proxy';
-			// if (url.href.includes('google'))
-			// 	return request('GET', req.url, req.headers, null, parse('http://127.0.0.1:1080'))
-			// 	.then(response => (ctx.res.writeHead(response.statusCode, response.headers), response.pipe(ctx.res)))
 		} catch (error) {
-			ctx.error = error;
 			ctx.decision = 'close';
 		}
 	}
 };
-
+/**
+ * 请求后置钩子：在收到目标服务器响应后执行
+ * @param {object} ctx - 上下文对象
+ */
 hook.request.after = (ctx) => {
 	const { req, proxyRes, netease, package: pkg } = ctx;
 	if (
@@ -620,15 +455,20 @@ hook.request.after = (ctx) => {
 	}
 };
 
+/**
+ * CONNECT请求前置钩子
+ * @param {object} ctx - 上下文对象
+ */
 hook.connect.before = (ctx) => {
 	const { req } = ctx;
-	const url = parse('https://' + req.url);
+	// 核心修改：使用 new URL()
+	const url = new URL('https://' + req.url);
 	if (
 		[url.hostname, req.headers.host].some((host) =>
 			hook.target.host.has(host)
 		)
 	) {
-		if (parseInt(url.port) === 80) {
+		if (parseInt(url.port, 10) === 80) { // 修正：使用基数10
 			req.url = `${global.address || 'localhost'}:${global.port[0]}`;
 			req.local = true;
 		} else if (global.port[1]) {
@@ -640,9 +480,14 @@ hook.connect.before = (ctx) => {
 	} else if (url.href.includes(global.endpoint)) ctx.decision = 'proxy';
 };
 
+/**
+ * TLS协商前置钩子
+ * @param {object} ctx - 上下文对象
+ */
 hook.negotiate.before = (ctx) => {
 	const { req, socket, decision } = ctx;
-	const url = parse('https://' + req.url);
+	// 核心修改：使用 new URL()
+	const url = new URL('https://' + req.url);
 	const target = hook.target.host;
 	if (req.local || decision) return;
 	if (target.has(socket.sni) && !target.has(url.hostname)) {

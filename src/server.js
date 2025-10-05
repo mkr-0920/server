@@ -1,86 +1,141 @@
+/**
+ * @name server.js
+ * @description 项目的核心代理服务器引擎。
+ * 负责创建HTTP和HTTPS服务器，定义请求处理流水线，并集成 hook.js 的逻辑。
+ */
+
+// 导入Node.js核心模块
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
-const parse = require('url').parse;
+const http = require('http');
+const https = require('https');
 
+// 导入项目内部模块
 const { logScope } = require('./logger');
-const logger = logScope('server');
 const sni = require('./sni');
 const hook = require('./hook');
 const request = require('./request');
 const { isHost } = require('./utilities');
 
+// 初始化日志记录器
+const logger = logScope('server');
+
+/**
+ * @type {object} proxy
+ * @description 包含代理服务器所有核心逻辑和处理函数的对象。
+ */
 const proxy = {
+	/**
+	 * 核心请求处理器，分为 mitm (HTTP处理) 和 tunnel (HTTPS处理)
+	 */
 	core: {
+		/**
+		 * HTTP请求处理流水线 (Man-in-the-Middle for HTTP)
+		 * @param {http.IncomingMessage} req
+		 * @param {http.ServerResponse} res
+		 */
 		mitm: (req, res) => {
+			// 特殊情况：处理代理自动配置 (PAC) 文件请求
 			if (req.url === '/proxy.pac') {
-				const url = parse('http://' + req.headers.host);
+				// 核心修改：使用 new URL() 替换 url.parse()
+				const url = new URL('http://' + req.headers.host);
 				res.writeHead(200, {
 					'Content-Type': 'application/x-ns-proxy-autoconfig',
 				});
 				res.end(`
-					function FindProxyForURL(url, host) {
-						if (${Array.from(hook.target.host)
-							.map((host) => `host == '${host}'`)
-							.join(' || ')}) {
-							return 'PROXY ${url.hostname}:${url.port || 80}'
-						}
-						return 'DIRECT'
-					}
-				`);
+          function FindProxyForURL(url, host) {
+            if (${Array.from(hook.target.host)
+				.map((host) => `host == '${host}'`)
+				.join(' || ')}) {
+              return 'PROXY ${url.hostname}:${url.port || 80}'
+            }
+            return 'DIRECT'
+          }
+        `);
 			} else {
+				// 标准HTTP请求处理流程
 				const ctx = { res, req };
 				Promise.resolve()
-					.then(() => proxy.protect(ctx))
-					.then(() => proxy.authenticate(ctx))
-					.then(() => hook.request.before(ctx))
-					.then(() => proxy.filter(ctx))
-					.then(() => proxy.log(ctx))
-					.then(() => proxy.mitm.request(ctx))
-					.then(() => hook.request.after(ctx))
-					.then(() => proxy.mitm.response(ctx))
-					.catch(() => proxy.mitm.close(ctx));
+					.then(() => proxy.protect(ctx)) // 1. 挂载错误处理器
+					.then(() => proxy.authenticate(ctx)) // 2. 代理身份认证
+					.then(() => hook.request.before(ctx)) // 3. 执行前置钩子 (我们的核心逻辑)
+					.then(() => proxy.filter(ctx)) // 4. 黑白名单过滤
+					.then(() => proxy.log(ctx)) // 5. 记录请求日志
+					.then(() => proxy.mitm.request(ctx)) // 6. 转发请求到目标服务器
+					.then(() => hook.request.after(ctx)) // 7. 执行后置钩子 (我们的核心逻辑)
+					.then(() => proxy.mitm.response(ctx)) // 8. 将响应返回给客户端
+					.catch(() => proxy.mitm.close(ctx)); // 捕获异常并关闭连接
 			}
 		},
+		/**
+		 * HTTPS隧道请求处理流水线 (CONNECT method)
+		 * @param {http.IncomingMessage} req
+		 * @param {net.Socket} socket
+		 * @param {Buffer} head
+		 */
 		tunnel: (req, socket, head) => {
 			const ctx = { req, socket, head };
 			Promise.resolve()
-				.then(() => proxy.protect(ctx))
-				.then(() => proxy.authenticate(ctx))
-				.then(() => hook.connect.before(ctx))
-				.then(() => proxy.filter(ctx))
-				.then(() => proxy.log(ctx))
-				.then(() => proxy.tunnel.connect(ctx))
-				.then(() => proxy.tunnel.dock(ctx))
-				.then(() => hook.negotiate.before(ctx))
-				.then(() => proxy.tunnel.pipe(ctx))
-				.catch(() => proxy.tunnel.close(ctx));
+				.then(() => proxy.protect(ctx)) // 1. 挂载错误处理器
+				.then(() => proxy.authenticate(ctx)) // 2. 代理身份认证
+				.then(() => hook.connect.before(ctx)) // 3. 执行连接前置钩子
+				.then(() => proxy.filter(ctx)) // 4. 黑白名单过滤
+				.then(() => proxy.log(ctx)) // 5. 记录请求日志
+				.then(() => proxy.tunnel.connect(ctx)) // 6. 连接到目标服务器
+				.then(() => proxy.tunnel.dock(ctx)) // 7. 与客户端握手并获取SNI
+				.then(() => hook.negotiate.before(ctx)) // 8. 执行协商钩子
+				.then(() => proxy.tunnel.pipe(ctx)) // 9. 建立双向数据管道
+				.catch(() => proxy.tunnel.close(ctx)); // 捕获异常并关闭连接
 		},
 	},
+
+	/**
+	 * 强制关闭/销毁socket连接
+	 * @param {net.Socket} socket
+	 */
 	abort: (socket) => {
 		if (socket) socket.end();
 		if (socket && !socket.destroyed) socket.destroy();
 	},
+
+	/**
+	 * 为请求、响应和socket挂载统一的错误处理器
+	 * @param {object} ctx
+	 */
 	protect: (ctx) => {
 		const { req, res, socket } = ctx;
 		if (req) req.on('error', () => proxy.abort(req.socket, 'req'));
 		if (res) res.on('error', () => proxy.abort(res.socket, 'res'));
 		if (socket) socket.on('error', () => proxy.abort(socket, 'socket'));
 	},
+
+	/**
+	 * 记录请求日志
+	 * @param {object} ctx
+	 */
 	log: (ctx) => {
 		const { req, socket, decision } = ctx;
-		if (socket)
-			if (socket) logger.debug({ decision, url: req.url }, `TUNNEL`);
-			else
-				logger.debug(
-					{
-						decision,
-						host: parse(req.url).host,
-						encrypted: req.socket.encrypted,
-					},
-					`MITM${req.socket.encrypted ? ' (ssl)' : ''}`
-				);
+		// 核心修改：使用 new URL() 替换 url.parse()
+		const url = new URL(req.url, `http${req.socket.encrypted ? 's' : ''}://${req.headers.host || 'localhost'}`);
+		if (socket) {
+			logger.debug({ decision, url: req.url }, `TUNNEL`);
+		} else {
+			logger.debug(
+				{
+					decision,
+					host: url.host,
+					encrypted: req.socket.encrypted,
+				},
+				`MITM${req.socket.encrypted ? ' (ssl)' : ''}`
+			);
+		}
 	},
+
+	/**
+	 * 代理身份认证
+	 * @param {object} ctx
+	 */
 	authenticate: (ctx) => {
 		const { req, res, socket } = ctx;
 		const credential = Buffer.from(
@@ -89,6 +144,7 @@ const proxy = {
 		).toString();
 		if ('proxy-authorization' in req.headers)
 			delete req.headers['proxy-authorization'];
+
 		if (
 			server.authentication &&
 			credential !== server.authentication &&
@@ -105,15 +161,20 @@ const proxy = {
 			return Promise.reject((ctx.error = 'authenticate'));
 		}
 	},
+
+	/**
+	 * 黑白名单过滤
+	 * @param {object} ctx
+	 */
 	filter: (ctx) => {
 		if (ctx.decision || ctx.req.local) return;
-		const url = parse((ctx.socket ? 'https://' : '') + ctx.req.url);
+		// 核心修改：使用 new URL() 替换 url.parse()
+		const url = new URL(ctx.req.url, `http${ctx.socket ? 's' : ''}://dummy-base`);
 		const match = (pattern) =>
 			url.href.search(new RegExp(pattern, 'g')) !== -1;
 		try {
 			const allow = server.whitelist.some(match);
 			const deny = server.blacklist.some(match);
-			// console.log('allow', allow, 'deny', deny)
 			if (!allow && deny) {
 				return Promise.reject((ctx.error = 'filter'));
 			}
@@ -121,6 +182,10 @@ const proxy = {
 			ctx.error = error;
 		}
 	},
+
+	/**
+	 * HTTP请求的具体实现
+	 */
 	mitm: {
 		request: (ctx) =>
 			new Promise((resolve, reject) => {
@@ -131,7 +196,8 @@ const proxy = {
 					req.headers['referer'] = 'https://www.bilibili.com/';
 					req.headers['user-agent'] = 'okhttp/3.4.1';
 				}
-				const url = parse(req.url);
+				// 核心修改：使用 new URL() 替换 url.parse()
+				const url = new URL(req.url);
 				const options = request.configure(req.method, url, req.headers);
 				ctx.proxyReq = request
 					.create(url)(options)
@@ -155,27 +221,34 @@ const proxy = {
 			proxy.abort(ctx.res.socket, 'mitm');
 		},
 	},
+
+	/**
+	 * HTTPS隧道的具体实现
+	 */
 	tunnel: {
 		connect: (ctx) =>
 			new Promise((resolve, reject) => {
 				if (ctx.decision === 'close')
 					return reject((ctx.error = ctx.decision));
 				const { req } = ctx;
-				const url = parse('https://' + req.url);
+				// 核心修改：使用 new URL() 替换 url.parse()
+				const url = new URL('https://' + req.url);
 				if (global.proxy && !req.local) {
+					// 通过上游代理连接
 					const options = request.configure(
 						req.method,
 						url,
 						req.headers
 					);
 					request
-						.create(proxy)(options)
+						.create(global.proxy)(options) // 注意这里 create 的参数是 global.proxy
 						.on('connect', (_, proxySocket) =>
 							resolve((ctx.proxySocket = proxySocket))
 						)
 						.on('error', (error) => reject((ctx.error = error)))
 						.end();
 				} else {
+					// 直接连接
 					const proxySocket = net
 						.connect(
 							url.port || 443,
@@ -217,6 +290,9 @@ const proxy = {
 	},
 };
 
+// --- 服务器创建与启动 ---
+
+// 读取SSL证书文件
 const cert = process.env.SIGN_CERT || path.join(__dirname, '..', 'server.crt');
 const key = process.env.SIGN_KEY || path.join(__dirname, '..', 'server.key');
 const options = {
@@ -224,19 +300,22 @@ const options = {
 	cert: fs.readFileSync(cert),
 };
 
+// 创建HTTP和HTTPS服务器实例
 const server = {
-	http: require('http')
+	http: http
 		.createServer()
 		.on('request', proxy.core.mitm)
 		.on('connect', proxy.core.tunnel),
-	https: require('https')
+	https: https
 		.createServer(options)
 		.on('request', proxy.core.mitm)
 		.on('connect', proxy.core.tunnel),
 };
 
+// 初始化黑白名单和认证信息
 server.whitelist = [];
 server.blacklist = ['://127\\.\\d+\\.\\d+\\.\\d+', '://localhost'];
 server.authentication = null;
 
+// 导出 server 对象，供 app.js 使用
 module.exports = server;
