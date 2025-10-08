@@ -1,3 +1,9 @@
+/**
+ * @name match.js
+ * @description 核心音源匹配与择优模块。
+ * 支持多种搜索策略：质量优先（并行搜索并对比码率）、顺序优先、速度优先。
+ */
+
 const find = require('./find');
 const request = require('../request');
 const {
@@ -23,6 +29,12 @@ const headerReferer = new Map([
 	['upos-hz-mirrorakam.akamaized.net', 'https://www.bilibili.com/'],
 ]);
 
+/**
+ * 从单个音源平台获取音频信息。
+ * @param {string} source - 音源名称 (e.g., 'qq')
+ * @param {object} info - 从网易云获取的歌曲元数据
+ * @returns {Promise<object>} 包含URL, br, size等信息的歌曲对象
+ */
 async function getAudioFromSource(source, info) {
 	logger.debug({ source, info }, 'Getting the audio...');
 	const audioData = await providers[source].check(info);
@@ -33,10 +45,9 @@ async function getAudioFromSource(source, info) {
 
 	logger.debug(song, 'The matched song is:');
 	if (!song || typeof song.url !== 'string')
-		throw new IncompleteAudioData(
-			'song is undefined, or song.url is not a string.'
-		);
+		throw new IncompleteAudioData('song is undefined, or song.url is not a string.');
 
+	// 为 FLAC 文件计算真实的平均码率，以供后续精确比较
 	if (song.br === 999000 && song.size > 0 && info.duration > 0) {
 		const realBitrate = Math.round((song.size * 8) / (info.duration / 1000));
 		logger.debug(
@@ -53,6 +64,13 @@ async function getAudioFromSource(source, info) {
 	};
 }
 
+/**
+ * 主匹配函数。
+ * @param {string} id - 网易云歌曲ID
+ * @param {string[]} [source] - 可选的音源列表
+ * @param {object} [data] - 可选的预取歌曲数据
+ * @returns {Promise<object>} 质量最佳的音源对象
+ */
 async function match(id, source, data) {
 	const candidate = (source || global.source || defaultSrc).filter(
 		(name) => name in providers
@@ -61,22 +79,14 @@ async function match(id, source, data) {
 	const audioInfo = await find(id, data);
 	let audioData = null;
 
-	const QUALITY_RANKING = {
-		'jymaster': 6, 'master': 5, 'hires': 4, 'sky': 3,
-		'lossless': 2, 'flac': 2, '320k': 1, '128k': 0,
-	};
-	const getQualityScore = (song) => {
-		if (!song || !song.qualityLabel) return -1;
-		return QUALITY_RANKING[song.qualityLabel] || -1;
-	};
-
 	if (process.env.SELECT_MAX_BR) {
+		// 策略一：“质量优先”模式 (并行搜索，对比码率)
 		let audioDataArr = await Promise.allSettled(
 			candidate.map(async (source) =>
 				getAudioFromSource(source, audioInfo).catch((e) => {
 					if (e) {
 						if (e instanceof RequestCancelled) logger.debug(e);
-						else logger.error(e.message || e); // 修正：安全地记录错误
+						else logger.error(e.message || e);
 					}
 					throw e;
 				})
@@ -92,10 +102,14 @@ async function match(id, source, data) {
 		}
 
 		audioDataArr = audioDataArr.map((result) => result.value);
+
+		// 使用计算出的精确码率(br)进行比较，选出码率最高的音源
 		audioData = audioDataArr.reduce((best, current) =>
-			getQualityScore(current) >= getQualityScore(best) ? current : best
+			(current.br || 0) >= (best.br || 0) ? current : best
 		);
+
 	} else if (FOLLOW_SOURCE_ORDER) {
+		// 策略二：“顺序优先”模式 (按顺序搜索，找到即停)
 		for (let i = 0; i < candidate.length; i++) {
 			const source = candidate[i];
 			try {
@@ -112,7 +126,9 @@ async function match(id, source, data) {
 		if (!audioData) {
 			throw new Error('No audioData!');
 		}
+
 	} else {
+		// 策略三：“速度优先”模式 (并行搜索，最快返回的获胜)
 		audioData = await Promise.any(
 			candidate.map(async (source) =>
 				getAudioFromSource(source, audioInfo).catch((e) => {
@@ -133,6 +149,11 @@ async function match(id, source, data) {
 	return audioData;
 }
 
+/**
+ * “验货”函数：通过范围请求验证URL有效性，并获取文件大小和码率。
+ * @param {string} url - 音频URL
+ * @returns {Promise<object>}
+ */
 async function check(url) {
 	const isHost = isHostWrapper(url);
 	const song = { size: 0, br: null, url: null, md5: null };
@@ -162,7 +183,6 @@ async function check(url) {
 		logger.debug(e, 'Failed to decode and extract the bitrate');
 	}
 
-	// ... (此处省略一些补充br的逻辑) ...
 	if (!song.br) {
 		if (isHost('qq.com') && song.url.includes('.m4a')) {
 			song.br = 96000;
@@ -188,113 +208,28 @@ async function check(url) {
 		song.size =
 			parseInt(
 				(headers['content-range'] || '').split('/').pop() ||
-				headers['content-length']
+					headers['content-length']
 			) || 0;
-
-		// --- 核心修正：注释掉过于严格的检查 ---
-		/* if (headers['content-length'] !== '8192') {
-			return Promise.reject();
-		} */
 	}
 
 	return song;
 }
 
+/**
+ * “音频侦探”：从音频文件头部数据中解析码率。
+ * @param {Buffer} buffer
+ * @returns {number | string}
+ */
 function decode(buffer) {
 	const map = {
 		3: {
-			3: [
-				'free',
-				32,
-				64,
-				96,
-				128,
-				160,
-				192,
-				224,
-				256,
-				288,
-				320,
-				352,
-				384,
-				416,
-				448,
-				'bad',
-			],
-			2: [
-				'free',
-				32,
-				48,
-				56,
-				64,
-				80,
-				96,
-				112,
-				128,
-				160,
-				192,
-				224,
-				256,
-				320,
-				384,
-				'bad',
-			],
-			1: [
-				'free',
-				32,
-				40,
-				48,
-				56,
-				64,
-				80,
-				96,
-				112,
-				128,
-				160,
-				192,
-				224,
-				256,
-				320,
-				'bad',
-			],
+			3: ['free', 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 'bad'],
+			2: ['free', 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 'bad'],
+			1: ['free', 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 'bad'],
 		},
 		2: {
-			3: [
-				'free',
-				32,
-				48,
-				56,
-				64,
-				80,
-				96,
-				112,
-				128,
-				144,
-				160,
-				176,
-				192,
-				224,
-				256,
-				'bad',
-			],
-			2: [
-				'free',
-				8,
-				16,
-				24,
-				32,
-				40,
-				48,
-				56,
-				64,
-				80,
-				96,
-				112,
-				128,
-				144,
-				160,
-				'bad',
-			],
+			3: ['free', 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 'bad'],
+			2: ['free', 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 'bad'],
 		},
 	};
 	map[2][1] = map[2][2];
@@ -304,18 +239,13 @@ function decode(buffer) {
 	if (buffer.slice(0, 4).toString() === 'fLaC') return 999;
 	if (buffer.slice(0, 3).toString() === 'ID3') {
 		pointer = 6;
-		const size = buffer
-			.slice(pointer, pointer + 4)
-			.reduce(
-				(summation, value, index) =>
-					(summation + (value & 0x7f)) << (7 * (3 - index)),
-				0
-			);
+		const size = buffer.slice(pointer, pointer + 4).reduce(
+			(summation, value, index) => (summation + (value & 0x7f)) << (7 * (3 - index)), 0
+		);
 		pointer = 10 + size;
 	}
 	const header = buffer.slice(pointer, pointer + 4);
 
-	// https://www.allegro.cc/forums/thread/591512/674023
 	if (
 		header.length === 4 &&
 		header[0] === 0xff &&
