@@ -36,9 +36,9 @@ const LOCAL_VIP_UID = (process.env.LOCAL_VIP_UID || '')
 // --- 2. 定义 hook 对象结构与拦截目标 ---
 
 const hook = {
-	request: { before: () => {}, after: () => {} },
-	connect: { before: () => {}, after: () => {} },
-	negotiate: { before: () => {} },
+	request: { before: () => { }, after: () => { } },
+	connect: { before: () => { }, after: () => { } },
+	negotiate: { before: () => { } },
 	target: { host: new Set(), path: new Set() },
 };
 
@@ -49,25 +49,25 @@ hook.target.host = new Set([
 ]);
 
 hook.target.path = new Set([
-    '/api/v3/playlist/detail', '/api/v3/song/detail', '/api/v6/playlist/detail', 
-    '/api/album/play', '/api/artist/privilege', '/api/album/privilege', 
-    '/api/v1/artist', '/api/v1/artist/songs', '/api/v2/artist/songs', 
-    '/api/artist/top/song', '/api/v1/album', '/api/album/v3/detail', 
-    '/api/playlist/privilege', '/api/song/enhance/player/url', 
-    '/api/song/enhance/player/url/v1', '/api/song/enhance/download/url', 
-    '/api/song/enhance/download/url/v1', '/api/song/enhance/privilege', 
-    '/api/ad', '/batch', '/api/batch', '/api/listen/together/privilege/get', 
-    '/api/playmode/intelligence/list', '/api/v1/search/get', 
-    '/api/v1/search/song/get', '/api/search/complex/get', 
-    '/api/search/complex/page', '/api/search/pc/complex/get', 
-    '/api/search/pc/complex/page', '/api/search/song/list/page', 
-    '/api/search/song/page', '/api/cloudsearch/pc', 
-    '/api/v1/playlist/manipulate/tracks', '/api/song/like', 
-    '/api/v1/play/record', '/api/playlist/v4/detail', '/api/v1/radio/get', 
-    '/api/v1/discovery/recommend/songs', '/api/usertool/sound/mobile/promote', 
-    '/api/usertool/sound/mobile/theme', '/api/usertool/sound/mobile/animationList', 
-    '/api/usertool/sound/mobile/all', '/api/usertool/sound/mobile/detail', 
-    '/api/vipauth/app/auth/query', '/api/music-vip-membership/client/vip/info',
+	'/api/v3/playlist/detail', '/api/v3/song/detail', '/api/v6/playlist/detail',
+	'/api/album/play', '/api/artist/privilege', '/api/album/privilege',
+	'/api/v1/artist', '/api/v1/artist/songs', '/api/v2/artist/songs',
+	'/api/artist/top/song', '/api/v1/album', '/api/album/v3/detail',
+	'/api/playlist/privilege', '/api/song/enhance/player/url',
+	'/api/song/enhance/player/url/v1', '/api/song/enhance/download/url',
+	'/api/song/enhance/download/url/v1', '/api/song/enhance/privilege',
+	'/api/ad', '/batch', '/api/batch', '/api/listen/together/privilege/get',
+	'/api/playmode/intelligence/list', '/api/v1/search/get',
+	'/api/v1/search/song/get', '/api/search/complex/get',
+	'/api/search/complex/page', '/api/search/pc/complex/get',
+	'/api/search/pc/complex/page', '/api/search/song/list/page',
+	'/api/search/song/page', '/api/cloudsearch/pc',
+	'/api/v1/playlist/manipulate/tracks', '/api/song/like',
+	'/api/v1/play/record', '/api/playlist/v4/detail', '/api/v1/radio/get',
+	'/api/v1/discovery/recommend/songs', '/api/usertool/sound/mobile/promote',
+	'/api/usertool/sound/mobile/theme', '/api/usertool/sound/mobile/animationList',
+	'/api/usertool/sound/mobile/all', '/api/usertool/sound/mobile/detail',
+	'/api/vipauth/app/auth/query', '/api/music-vip-membership/client/vip/info',
 ]);
 
 const domainList = [
@@ -77,13 +77,19 @@ const domainList = [
 
 // --- 3. 核心钩子函数实现 ---
 
+/**
+ * 请求前置钩子 (Request Interception Hook - Before)
+ * @description 在代理将客户端请求转发给目标服务器之前执行。
+ * 主要职责是对请求进行预处理、解密，并触发后台并行搜索。
+ * @param {object} ctx - 包含 `req` (客户端请求) 的上下文对象。
+ */
 hook.request.before = (ctx) => {
 	const { req } = ctx;
 	req.url =
 		(req.url.startsWith('http://') || req.url.startsWith('https://')
 			? ''
 			: (req.socket.encrypted ? 'https:' : 'http:') + '//' + (req.headers.host || 'localhost')) + req.url;
-	
+
 	const url = new URL(req.url);
 
 	if ([url.hostname, req.headers.host].some((host) => isHost(host, 'music.163.com')))
@@ -115,7 +121,7 @@ hook.request.before = (ctx) => {
 					} else if (url.pathname.startsWith('/eapi/')) {
 						netease.crypto = 'eapi';
 					}
-					
+
 					try {
 						let data;
 						switch (netease.crypto) {
@@ -131,57 +137,29 @@ hook.request.before = (ctx) => {
 								netease.e_r = (netease.param.e_r === 'true' || netease.param.e_r === true);
 								break;
 						}
-					} catch(e) {
+					} catch (e) {
 						logger.error(e, `Failed to decrypt request body for ${req.url}.`);
 					}
 
 					netease.path = (netease.path || '').replace(/\/\d*$/, '');
 					ctx.netease = netease;
 
-					if (netease.path === '/api/song/enhance/player/url') {
-						logger.info('Upgrading and Standardizing player URL request from old endpoint to v1.');
-						const songId = netease.param.id || (JSON.parse(netease.param.ids || '[]'))[0];
-						netease.param = {
-							ids: `["${songId}"]`, level: 'standard', encodeType: 'flac',
-							header: netease.param.header, e_r: netease.param.e_r,
-						};
-						netease.path = '/api/song/enhance/player/url/v1';
-					}
+					if (netease.path && netease.path.includes('/player/url')) {
+						let songId = null;
+						try {
+							// 兼容新旧接口，从参数中提取歌曲ID
+							songId = netease.param.id || (JSON.parse(netease.param.ids || '[]'))[0];
+						} catch (e) {
+							logger.error(e, 'Could not parse song ID from request parameters.');
+						}
 
-					if (netease.path === '/api/song/enhance/player/url/v1') {
-						const songId = (JSON.parse(netease.param.ids || '[]'))[0];
 						if (songId) {
-							let sanitizedSongId = songId.toString();
-							const matchResult = sanitizedSongId.match(/\d+/);
-							if (matchResult) sanitizedSongId = matchResult[0];
-							
+							// 净化ID以兼容安卓客户端（例如移除 _0 后缀）
+							const sanitizedSongId = songId.toString().match(/\d+/)?.[0] || songId.toString();
+
+							// 启动后台并行搜索，并将任务Promise存入上下文，供 after 钩子使用
 							ctx.alternativeSearchPromise = match(sanitizedSongId).catch(() => null);
 							logger.info(`Started parallel search for song ${sanitizedSongId} in the background.`);
-						}
-
-						const cookies = cookieToMap(req.headers.cookie || '');
-						cookies.appver = '9.9.9';
-						req.headers.cookie = mapToCookie(cookies);
-						
-						const internalHeader = JSON.parse(netease.param.header || '{}');
-						internalHeader.appver = '9.9.9';
-						netease.param.header = JSON.stringify(internalHeader);
-						
-						if (netease.param.level !== 'jymaster') {
-							netease.param.level = 'jymaster';
-							netease.param.encodeType = 'flac';
-						}
-						
-						const turn = 'http://music.163.com' + netease.path;
-						let query;
-                        if (netease.crypto === 'linuxapi') {
-                            query = crypto.linuxapi.encryptRequest(turn, netease.param);
-                        } else if (netease.crypto === 'eapi') {
-                            query = crypto.eapi.encryptRequest(turn, netease.param);
-                        }
-						if (query) {
-							req.url = query.url;
-							req.body = query.body + netease.pad;
 						}
 					}
 
@@ -612,104 +590,100 @@ const tryLike = (ctx) => {
 const computeHash = (task) =>
 	request('GET', task.url).then((response) => crypto.md5.pipe(response));
 
-// ===== 这是最终的、完美的 tryMatch 函数，请用它进行整体替换 =====
-
-// ===== 这是最终的、完美的 tryMatch 函数，请用它进行整体替换 =====
-
 const tryMatch = (ctx) => {
-	const { req, netease, alternativeSearchPromise } = ctx;
-	const { jsonBody } = netease;
-	const min_br = Number(process.env.MIN_BR) || 0;
-	let tasks;
-	let target = 0;
+    const { req, netease, alternativeSearchPromise } = ctx;
+    const { jsonBody } = netease;
+    const min_br = Number(process.env.MIN_BR) || 0;
+    let tasks;
+    let target = 0;
 
-	const QUALITY_RANKING = {
-		'jymaster': 6, 'master': 6, 'jyeffect': 5, 'sky': 4, 'hires': 3,
-		'lossless': 2, 'flac': 2, '320k': 1, '128k': 0,
-	};
+    const inject = (item) => {
+        item.flag = 0;
 
-	const getQualityScore = (song, isNetease = false) => {
-		if (!song) return -1;
-		const label = isNetease ? song.level : song.qualityLabel;
-		return QUALITY_RANKING[label] || -1;
-	};
+        // 如果没有并行搜索任务（例如处理非歌曲链接API），则直接跳过
+        if (!alternativeSearchPromise) {
+            if (item.code === 200 && !item.freeTrialInfo) {
+                logger.info(
+                    { id: item.id, source: 'Netease (Original)', br: item.br, url: item.url },
+                    `[PASSTHROUGH] Using Netease source for song ${item.id} (no alternative search).`
+                );
+            }
+            return;
+        }
 
-	const inject = (item) => {
-		item.flag = 0;
+        // 等待我们预先启动的后台搜索任务
+        return alternativeSearchPromise.then((matchedSong) => {
+            logger.debug({ matchedSong }, '[DEBUG] Full content of matchedSong object:');
 
-		if (!alternativeSearchPromise) {
-			if (item.code === 200 && !item.freeTrialInfo) {
-				logger.info(
-					{ id: item.id, source: 'Netease (Original)', br: item.br, url: item.url },
-					`[PASSTHROUGH] Song ${item.id} is playable on Netease.`
-				);
-			}
-			return;
-		}
+            // --- 全新的“强制替换”核心逻辑 ---
+            if (matchedSong) {
+                // 只要匹配成功 (matchedSong 不为 null)，就无条件使用它
+                logger.info(
+                    { id: item.id, source: matchedSong.source || 'Matched Provider', br: matchedSong.br },
+                    `[FORCE REPLACE] Using matched source for song ${item.id}. Overwriting Netease response.`
+                );
 
-		return alternativeSearchPromise.then((matchedSong) => {
-			logger.debug({ matchedSong }, '[DEBUG] Full content of matchedSong object:');
+                // 使用匹配到的结果，更新 item 对象的属性
+                item.url = matchedSong.url; // 这个URL将在下面被包装
+                item.br = matchedSong.br;
+                item.size = matchedSong.size;
+                item.md5 = matchedSong.md5;
+                item.type = 'flac';
+                item.code = 200;
+                item.freeTrialInfo = null;
+                
+                // 使用 /package/ 代理流来解决播放中断问题
+                const realUrl = matchedSong.url;
+                if (global.endpoint) {
+                    let os = '';
+                    try {
+                        let { header } = netease.param;
+                        header = typeof header === 'string' ? JSON.parse(header) : header;
+                        const cookie = querystring.parse(req.headers.cookie.replace(/\s/g, ''), ';');
+                        os = header.os || cookie.os;
+                    } catch (e) { }
 
-			const neteasePlayable = item.code === 200 && !item.freeTrialInfo && item.br >= min_br;
-			const matchPlayable = !!matchedSong;
+                    const encodedUrl = crypto.base64.encode(realUrl);
+                    if (os === 'pc' || os === 'uwp') {
+                        item.url = `${global.endpoint.replace('https://', 'http://')}/package/${encodedUrl}/${item.id}.${item.type}`;
+                    } else {
+                        item.url = `${global.endpoint}/package/${encodedUrl}/${item.id}.${item.type}`;
+                    }
+                }
+                // 如果没有设置 endpoint，item.url 保持为 realUrl
+                
+            } else {
+                // 如果匹配失败 (matchedSong 为 null)，则记录警告，并使用网易云的原始响应
+                logger.warn(
+                    { id: item.id, neteaseResponse: { code: item.code, br: item.br } },
+                    `[REPLACE FAILED] Matched source returned null. Falling back to original Netease response.`
+                );
+            }
 
-			const neteaseScore = getQualityScore(item, true);
-			const matchScore = getQualityScore(matchedSong, false);
+            // 打印最终将发送给客户端的数据
+            logger.info(
+                {
+                    id: item.id,
+                    source: matchedSong ? (matchedSong.source || 'Matched Provider') : 'Netease (Original)',
+                    final_br: item.br,
+                    final_url: item.url
+                },
+                `[FINAL DATA] Data for song ${item.id}.`
+            );
+        })
+        .catch((e) => e && logger.error(e));
+    };
 
-			let useMatchedSource = false;
-			if (matchPlayable) {
-				if (!neteasePlayable || matchScore > neteaseScore) {
-					useMatchedSource = true;
-				}
-			}
-
-			const choice = useMatchedSource
-				? `Matched Provider (score: ${matchScore} > Netease score: ${neteaseScore})`
-				: (neteasePlayable ? `Netease (Original) (score: ${neteaseScore} >= Matched score: ${matchScore})` : 'Both failed');
-
-			const finalSong = useMatchedSource ? matchedSong : (neteasePlayable ? item : null);
-
-			logger.debug(
-				{ id: item.id, choice: choice, final_br: finalSong ? finalSong.br : 0 },
-				`[COMPARE] Audio source selection complete for song ${item.id}.`
-			);
-
-			if (useMatchedSource) {
-				// 更新 item 对象的属性
-				item.url = finalSong.url; // <-- 直接使用最终选择的URL
-				item.br = finalSong.br;
-				item.size = finalSong.size;
-				item.md5 = finalSong.md5;
-				item.type = 'flac';
-				item.code = 200;
-				item.freeTrialInfo = null;
-			}
-
-			// 最终选择日志（保持不变，但现在会打印正确的URL）
-			logger.info(
-				{
-					id: item.id,
-					source: useMatchedSource ? (matchedSong.source || 'Matched Provider') : 'Netease (Original)',
-					quality_score: useMatchedSource ? matchScore : neteaseScore,
-					final_br: item.br,
-					final_url: item.url
-				},
-				`[FINAL CHOICE] Selected audio source for song ${item.id}.`
-			);
-		})
-			.catch((e) => e && logger.error(e));
-	};
-
-	if (!Array.isArray(jsonBody.data)) {
-		tasks = [inject(jsonBody.data)];
-	} else if (netease.path.includes('download')) {
-		jsonBody.data = jsonBody.data[0];
-		tasks = [inject(jsonBody.data)];
-	} else {
-		target = netease.web ? 0 : parseInt(((Array.isArray(netease.param.ids) ? netease.param.ids : JSON.parse(netease.param.ids))[0] || 0).toString().replace('_0', ''));
-		tasks = jsonBody.data.map((item) => inject(item));
-	}
-	return Promise.all(tasks).catch((e) => e && logger.error(e));
+    if (!Array.isArray(jsonBody.data)) {
+        tasks = [inject(jsonBody.data)];
+    } else if (netease.path.includes('download')) {
+        jsonBody.data = jsonBody.data[0];
+        tasks = [inject(jsonBody.data)];
+    } else {
+        target = netease.web ? 0 : parseInt(((Array.isArray(netease.param.ids) ? netease.param.ids : JSON.parse(netease.param.ids))[0] || 0).toString().replace('_0', ''));
+        tasks = jsonBody.data.map((item) => inject(item));
+    }
+    return Promise.all(tasks).catch((e) => e && logger.error(e));
 };
 
 const unblockSoundEffects = (obj) => {
