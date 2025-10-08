@@ -1,79 +1,74 @@
+/**
+ * @name qq.js
+ * @description QQ音乐音源提供者。
+ * 通过请求您自定义的后端API来获取音源URL。
+ */
+
 const request = require('../request');
 const { getManagedCacheStorage } = require('../cache');
+const { logScope } = require('../logger');
 
-/**
- * 直接从您的后端API搜索并获取音源链接
- * @param {object} info - 包含歌曲、歌手和专辑信息的结构化对象
- */
+const logger = logScope('provider/qq');
+
 const fetchTrackFromAPI = (info) => {
-    // 1. 从 info 对象中提取歌曲、歌手和专辑信息
     const songName = info.name;
     const artistName = info.artists.map(artist => artist.name).join(' / ');
     const albumName = info.album ? info.album.name : null;
 
-    // 2. 构建您的后端API所需的查询参数
     const searchQuery = `${artistName} - ${songName}`;
     let url = `http://172.17.0.1:5000/api/qq?q=${encodeURIComponent(searchQuery)}`;
     if (albumName) {
         url += `&album=${encodeURIComponent(albumName)}`;
     }
 
-    // 3. 设置包含API密钥的请求头
     const headers = {
         'X-API-Key': ''
     };
 
-    // 4. 发起请求并处理响应
     return request('GET', url, headers)
-        .then(response => response.json())
+        .then(response => {
+            if (response.statusCode < 200 || response.statusCode > 299) {
+                throw new Error(`您的自定义API [${url}] 返回了错误状态码: ${response.statusCode}`);
+            }
+            return response.json().catch(async () => {
+                const rawBody = await response.text();
+                logger.error({ rawBody }, '无法将您的自定义API响应解析为JSON。');
+                throw new Error('从您的自定义API收到了无效的JSON响应。');
+            });
+        })
         .then(jsonBody => {
             if (jsonBody && jsonBody.code === 200 && jsonBody.data && jsonBody.data.urls) {
                 const musicUrls = jsonBody.data.urls;
                 let selectedUrl = null;
-                let qualityLabel = null;
 
-                // --- 核心修改：按优先级选择URL，并同时记录品质标签 ---
+                // 按“母带 > 无损 > 320k > 128k”的优先级选择音源URL
                 if (musicUrls.master) {
                     selectedUrl = musicUrls.master;
-                    qualityLabel = 'master';
                 } else if (musicUrls.flac) {
                     selectedUrl = musicUrls.flac;
-                    qualityLabel = 'flac';
                 } else if (musicUrls['320']) {
                     selectedUrl = musicUrls['320'];
-                    qualityLabel = '320k';
                 } else if (musicUrls['128']) {
                     selectedUrl = musicUrls['128'];
-                    qualityLabel = '128k';
                 }
-                // --- 修改结束 ---
 
                 if (selectedUrl) {
-                    // 成功找到了URL，返回一个包含所有必需信息的对象
-                    // 注意：br 和 size 等信息会在 match.js 的 check 函数中被自动获取，这里我们只需提供 URL 和品质标签
                     return {
-                        url: selectedUrl,
-                        qualityLabel: qualityLabel // <-- 关键！附加上我们的品质标签
+                        url: selectedUrl
                     };
                 }
             }
-
-            return Promise.reject('未在API响应中找到有效的播放链接');
+            
+            throw new Error('未在您的API响应中找到有效的播放链接');
+        })
+        .catch(error => {
+            logger.error(error, `请求您的自定义API失败: ${info.name}`);
+            throw error;
         });
 };
 
 const cs = getManagedCacheStorage('provider/qq');
 
-/**
- * 检查并获取歌曲音源的主函数 (带缓存)
- * @param {object} info 
- */
-const check = (info) =>
-    cs.cache(info, () => fetchTrackFromAPI(info)) // 直接调用我们新的API函数
-        .catch((error) => {
-            console.error("从后端获取QQ音乐音源失败:", error);
-            // 捕获错误，避免程序崩溃
-        });
+const check = (info) => cs.cache(info, () => fetchTrackFromAPI(info));
 
-// 只需导出 check 函数作为公共接口
 module.exports = { check };
