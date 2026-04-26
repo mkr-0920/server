@@ -12,6 +12,6 @@ ENV NODE_ENV production
 
 WORKDIR /app
 
-EXPOSE 8081 8082
+EXPOSE 58081 58082
 
 ENTRYPOINT ["node", "app.js"]

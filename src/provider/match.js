@@ -1,12 +1,6 @@
-/**
- * @name match.js
- * @description 核心音源匹配与择优模块。
- * 支持多种搜索策略：质量优先（并行搜索并对比码率）、顺序优先、速度优先。
- */
-
 const find = require('./find');
 const request = require('../request');
-const { getMatch, saveMatch } = require('../database');
+const { getPersistentMatch, savePersistentMatch } = require('../database');
 const {
 	PROVIDERS: providers,
 	DEFAULT_SOURCE: defaultSrc,
@@ -31,24 +25,24 @@ const headerReferer = new Map([
 ]);
 
 /**
- * 从单个音源平台获取音频信息。
- * @param {string} source - 音源名称 (e.g., 'qq')
- * @param {object} info - 从网易云获取的歌曲元数据
- * @returns {Promise<object>} 包含URL, br, size等信息的歌曲对象
+ * @param {string} source
+ * @param {object} info
+ * @returns {Promise<object>}
  */
 async function getAudioFromSource(source, info) {
 	logger.debug({ source, info }, 'Getting the audio...');
 	const rawAudioData = await providers[source].check(info);
 	if (!rawAudioData) throw new SongNotAvailable(source);
 
-	const urlToCheck = (typeof rawAudioData === 'object' && rawAudioData.url) ? rawAudioData.url : rawAudioData;
+	// Updated providers return {url, id}. Legacy ones return string url.
+	const isObjectResult = (typeof rawAudioData === 'object' && rawAudioData.url);
+	const urlToCheck = isObjectResult ? rawAudioData.url : rawAudioData;
 	const song = await check(urlToCheck);
 
 	logger.debug(song, 'The matched song is:');
 	if (!song || typeof song.url !== 'string')
 		throw new IncompleteAudioData('song is undefined, or song.url is not a string.');
 
-	// 为 FLAC 文件计算真实的平均码率，以供后续精确比较
 	if (song.br === 999000 && song.size > 0 && info.duration > 0) {
 		const realBitrate = Math.round((song.size * 8) / (info.duration / 1000));
 		logger.debug(
@@ -58,20 +52,26 @@ async function getAudioFromSource(source, info) {
 	}
 
 	logger.debug({ source, info }, 'The audio matched!');
-	return {
+	
+	const result = {
 		...song,
-		...(typeof rawAudioData === 'object' && rawAudioData),
-		source,
-		native_id: (typeof rawAudioData === 'object' && rawAudioData.id) ? rawAudioData.id : rawAudioData
+		...(isObjectResult && rawAudioData),
+		source
 	};
+	
+	// Strictly define the platform_id if available
+	if (isObjectResult && rawAudioData.id) {
+		result.platform_id = String(rawAudioData.id);
+	}
+	
+	return result;
 }
 
 /**
- * 主匹配函数。
- * @param {string} id - 网易云歌曲ID
- * @param {string[]} [source] - 可选的音源列表
- * @param {object} [data] - 可选的预取歌曲数据
- * @returns {Promise<object>} 质量最佳的音源对象
+ * @param {string} id
+ * @param {string[]} [source]
+ * @param {object} [data]
+ * @returns {Promise<object>}
  */
 async function match(id, source, data) {
 	const candidate = (source || global.source || defaultSrc).filter(
@@ -80,30 +80,25 @@ async function match(id, source, data) {
 
 	let audioData = null;
 
-	// Level 2: Persistent Cache Check (SQLite)
-	const cachedMatch = getMatch(id);
-	if (cachedMatch && providers[cachedMatch.source] && typeof providers[cachedMatch.source].track === 'function') {
-		logger.info(`[CACHE HIT] Found persistent match for song ${id} in provider [${cachedMatch.source}]`);
+	// Level 2: Persistent Cache Check (Generic)
+	const cachedMatch = getPersistentMatch(id);
+	if (cachedMatch && providers[cachedMatch.platform] && typeof providers[cachedMatch.platform].track === 'function') {
+		const platform = cachedMatch.platform;
+		const song_id = cachedMatch.song_id;
+		
+		logger.info(`[CACHE HIT] Found persistent match for song ${id} in provider [${platform}]`);
+		
 		try {
-			// Extract the best parameter for track(). 
-			// We now store the exact ID needed by the provider in meta.native_id or matched_id
-			const trackParam = cachedMatch.meta.native_id || cachedMatch.matched_id || cachedMatch.meta;
-			
-			// Defensive check: if it looks like a URL, don't use it as a tracking ID
-			if (typeof trackParam === 'string' && trackParam.includes('http')) {
-				throw new Error('Cached ID is a URL, ignoring.');
-			}
-
-			const url = await providers[cachedMatch.source].track(trackParam);
+			// Call track() with strictly the string song_id
+			const url = await providers[platform].track(song_id);
 			if (url) {
 				const urlToCheck = (typeof url === 'object' && url.url) ? url.url : url;
 				audioData = await check(urlToCheck);
-				audioData.source = cachedMatch.source;
-				audioData.native_id = trackParam;
-
-				// Keep the meta data around
-				Object.assign(audioData, cachedMatch.meta);
-
+				audioData.source = platform;
+				audioData.platform_id = song_id;
+				
+				Object.assign(audioData, cachedMatch.metadata);
+				
 				logger.info(
 					{
 						'歌曲ID': id,
@@ -119,15 +114,15 @@ async function match(id, source, data) {
 			logger.warn(`[CACHE INVALID] Persistent match for ${id} failed to track. Re-searching...`);
 		}
 	}
+
 	const audioInfo = await find(id, data);
 
 	if (FOLLOW_SOURCE_ORDER) {
-		// 策略一（可选）：“顺序优先”模式 (按顺序搜索，找到即停)
 		logger.debug('Using "Source Order" strategy.');
 		for (let i = 0; i < candidate.length; i++) {
-			const source = candidate[i];
+			const providerSource = candidate[i];
 			try {
-				audioData = await getAudioFromSource(source, audioInfo);
+				audioData = await getAudioFromSource(providerSource, audioInfo);
 				break;
 			} catch (e) {
 				if (e) {
@@ -142,11 +137,10 @@ async function match(id, source, data) {
 		}
 
 	} else {
-		// 策略二（默认）：“质量优先”模式 (并行搜索，对比码率)
 		logger.debug('Using "Max Bitrate" (quality first) strategy.');
 		let audioDataArr = await Promise.allSettled(
-			candidate.map(async (source) =>
-				getAudioFromSource(source, audioInfo).catch((e) => {
+			candidate.map(async (providerSource) =>
+				getAudioFromSource(providerSource, audioInfo).catch((e) => {
 					if (e) {
 						if (e instanceof RequestCancelled) logger.debug(e);
 						else logger.error(e.message || e);
@@ -166,17 +160,16 @@ async function match(id, source, data) {
 
 		audioDataArr = audioDataArr.map((result) => result.value);
 
-		// 使用计算出的精确码率(br)进行比较，选出码率最高的音源
 		audioData = audioDataArr.reduce((best, current) =>
 			(current.br || 0) >= (best.br || 0) ? current : best
 		);
 	}
 
-	if (audioData && audioData.source !== 'pyncmd') {
-		saveMatch(id, audioData.source, audioData);
+	// Only save if the provider gave us a clean string platform_id and it's not pyncmd
+	if (audioData && audioData.source !== 'pyncmd' && audioData.platform_id) {
+		savePersistentMatch(id, audioData.source, audioData.platform_id, audioData);
 	}
 
-	// 使用 logger.info 打印最终胜出的音源详细信息
 	logger.info(
 		{
 			'歌曲ID': audioInfo.id,
@@ -190,11 +183,6 @@ async function match(id, source, data) {
 	return audioData;
 }
 
-/**
- * “验货”函数：通过范围请求验证URL有效性，并获取文件大小和码率。
- * @param {string} url - 音频URL
- * @returns {Promise<object>}
- */
 async function check(url) {
 	const isHost = isHostWrapper(url);
 	const song = { size: 0, br: null, url: null, md5: null };
@@ -249,18 +237,13 @@ async function check(url) {
 		song.size =
 			parseInt(
 				(headers['content-range'] || '').split('/').pop() ||
-				headers['content-length']
+					headers['content-length']
 			) || 0;
 	}
 
 	return song;
 }
 
-/**
- * “音频侦探”：从音频文件头部数据中解析码率。
- * @param {Buffer} buffer
- * @returns {number | string}
- */
 function decode(buffer) {
 	const map = {
 		3: {

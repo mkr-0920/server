@@ -1,29 +1,28 @@
-const Database = require('better-sqlite3');
+const Database = eval('require')('better-sqlite3');
 const path = require('path');
 const { logScope } = require('./logger');
 
 const logger = logScope('database');
 
-// Place data.db in the project root
 const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data.db');
 let db;
 
 try {
 	db = new Database(dbPath);
-	db.pragma('journal_mode = WAL'); // Better concurrency
+	db.pragma('journal_mode = WAL');
 
-	// Initialize the table if it doesn't exist
+	// Create table persistent_match
 	db.exec(`
-		CREATE TABLE IF NOT EXISTS match_cache (
+		CREATE TABLE IF NOT EXISTS persistent_match (
 			netease_id TEXT PRIMARY KEY,
-			source TEXT NOT NULL,
-			matched_id TEXT,
-			meta_json TEXT NOT NULL,
-			utime INTEGER NOT NULL
+			platform TEXT NOT NULL,
+			song_id TEXT NOT NULL,
+			metadata TEXT NOT NULL,
+			updated_at INTEGER NOT NULL
 		)
 	`);
 	
-	const count = db.prepare('SELECT count(*) as total FROM match_cache').get().total;
+	const count = db.prepare('SELECT count(*) as total FROM persistent_match').get().total;
 	logger.info(`Database initialized at ${dbPath} (Total cached matches: ${count})`);
 } catch (error) {
 	logger.error(error, `Failed to initialize database at ${dbPath}`);
@@ -32,24 +31,23 @@ try {
 let stmtGet, stmtInsert;
 
 if (db) {
-	stmtGet = db.prepare('SELECT * FROM match_cache WHERE netease_id = ?');
+	stmtGet = db.prepare('SELECT * FROM persistent_match WHERE netease_id = ?');
 	stmtInsert = db.prepare(`
-		INSERT OR REPLACE INTO match_cache (netease_id, source, matched_id, meta_json, utime)
+		INSERT OR REPLACE INTO persistent_match (netease_id, platform, song_id, metadata, updated_at)
 		VALUES (?, ?, ?, ?, ?)
 	`);
 }
 
 /**
- * Get a cached match for a Netease song ID
  * @param {string|number} netease_id
  * @returns {object|null}
  */
-const getMatch = (netease_id) => {
+const getPersistentMatch = (netease_id) => {
 	if (!db) return null;
 	try {
 		const row = stmtGet.get(String(netease_id));
 		if (row) {
-			row.meta = JSON.parse(row.meta_json);
+			row.metadata = JSON.parse(row.metadata);
 			return row;
 		}
 	} catch (e) {
@@ -59,38 +57,32 @@ const getMatch = (netease_id) => {
 };
 
 /**
- * Save a successful match to the database
  * @param {string|number} netease_id
- * @param {string} source
- * @param {object} meta - The song object resolved from the provider's check/search
+ * @param {string} platform
+ * @param {string} song_id
+ * @param {object} meta
  */
-const saveMatch = (netease_id, source, meta) => {
+const savePersistentMatch = (netease_id, platform, song_id, meta) => {
 	if (!db) return;
 	try {
-		// Robustly extract the most specific native ID for storage
-		let matched_id = '';
-		// Prioritize the native_id property we added in match.js
-		const idObj = meta.native_id || meta.id || meta;
-		
-		if (typeof idObj === 'object') {
-			matched_id = String(idObj.song || idObj.id || '');
-		} else {
-			matched_id = String(idObj);
-		}
+		const clean_song_id = String(song_id || '');
 
-		// CRITICAL CHECK: Ensure we didn't accidentally catch a URL as the ID
-		if (!matched_id || matched_id === '[object Object]' || matched_id.includes('http')) {
-			return; 
+		// Strict assertions to prevent pollution
+		if (!clean_song_id || clean_song_id === '[object Object]') {
+			throw new Error(`Invalid song_id type or format: ${clean_song_id}`);
+		}
+		if (clean_song_id.includes('http://') || clean_song_id.includes('https://')) {
+			throw new Error(`Invalid song_id format, contains URL: ${clean_song_id}`);
 		}
 		
 		stmtInsert.run(
 			String(netease_id),
-			source,
-			matched_id,
+			platform,
+			clean_song_id,
 			JSON.stringify(meta),
 			Date.now()
 		);
-		logger.debug({ id: netease_id, source }, 'Successfully persisted match to database');
+		logger.debug({ id: netease_id, platform, song_id: clean_song_id }, 'Successfully persisted match to database');
 	} catch (e) {
 		logger.error(e, 'Failed to save match to database');
 	}
@@ -98,6 +90,8 @@ const saveMatch = (netease_id, source, meta) => {
 
 module.exports = {
 	db,
-	getMatch,
-	saveMatch
+	getMatch: getPersistentMatch,       // Kept for backward compatibility if needed temporarily
+	saveMatch: savePersistentMatch,     // Kept for backward compatibility if needed temporarily
+	getPersistentMatch,
+	savePersistentMatch
 };

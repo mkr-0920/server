@@ -1,8 +1,5 @@
-precompiled
+precompiled/
 demo.txt
-qq.js
-pyncmd.js
-local.js
 
 # Logs
 logs
@@ -80,6 +77,9 @@ server.csr
 
 # Windows daemon
 daemon/
+
+# Database
+data.db*
 
 # parcel's cache
 .parcel-cache/

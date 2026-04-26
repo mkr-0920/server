@@ -5,9 +5,11 @@ const track = async (info) => {
     const url = 'http://172.17.0.1:5000/api/netease?level=jymaster&id=' + info.id;
 
     // 1. 创建包含API密钥的headers对象
-    const headers = {
-        'X-API-Key': ''
-    };
+    const headers = {};
+    const apiKey = process.env.PYNCMD_API_KEY || '';
+    if (apiKey) {
+        headers['X-API-Key'] = apiKey;
+    }
 
     try {
         // 2. 将headers对象传给您的request函数
@@ -30,7 +32,7 @@ const track = async (info) => {
 
 const cs = getManagedCacheStorage('provider/pyncmd');
 const check = async (info) => {
-	return cs.cache(info, () => track(info));
+    return cs.cache(info, () => track(info));
 };
 
 module.exports = { check };

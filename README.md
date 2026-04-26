@@ -46,7 +46,7 @@ npx -p @unblockneteasemusic/server unblockneteasemusic
 
 #### 配置
 
-http 代理使用 `127.0.0.1`，端口默认使用 `8081`。
+http 代理使用 `127.0.0.1`，端口默认使用 `58081`。
 
 如果想要添加启动参数和环境变量，请在项目根目录中的 `nw.js` 中配置 `scriptOptions` 和 `env`。
 

@@ -4,6 +4,9 @@ const webpack = require('webpack');
 module.exports = {
 	target: 'node',
 	mode: 'production',
+	externals: {
+		'better-sqlite3': 'commonjs better-sqlite3',
+	},
 	entry: {
 		app: './src/app.js',
 		bridge: './src/bridge.js',

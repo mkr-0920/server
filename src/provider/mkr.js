@@ -5,7 +5,7 @@ const { getManagedCacheStorage } = require('../cache');
 const api_key = process.env.MKR_API_KEY || '';
 
 const format = (song) => ({
-	id: song.id,
+	id: String(song.id),
 	name: song.name,
 	duration: song.duration,
 	album: { id: song.album_id || 0, name: song.album_name || '' },
@@ -22,10 +22,9 @@ const search = async (info) => {
 		const response = await request('GET', url, headers);
 		const jsonBody = await response.json();
 		if (jsonBody.code === 200 && jsonBody.data) {
-			// We assume the local API returns a list of songs in 'items' or directly in 'data'
 			const list = (jsonBody.data.items || jsonBody.data.songs || jsonBody.data.list || []).map(format);
 			const matched = select(list, info);
-			return matched ? matched.id : Promise.reject();
+			if (matched) return matched.id; // Return string id natively
 		}
 		return Promise.reject();
 	} catch (e) {
@@ -34,6 +33,8 @@ const search = async (info) => {
 };
 
 const track = async (id) => {
+	if (!id || typeof id !== 'string') return Promise.reject();
+
 	const url = `http://127.0.0.1:5000/api/local/play_info/${id}`;
 	const headers = { 'X-API-Key': api_key };
 
@@ -54,7 +55,8 @@ const cs = getManagedCacheStorage('provider/mkr');
 const check = async (info) => {
 	try {
 		const id = await cs.cache(info, () => search(info));
-		return await track(id);
+		const url = await track(id);
+		return { url, id }; // Return standard object structure
 	} catch (e) {
 		return Promise.reject();
 	}
