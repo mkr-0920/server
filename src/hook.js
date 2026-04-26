@@ -618,7 +618,7 @@ const tryMatch = (ctx) => {
             // --- 全新的“强制替换”核心逻辑 ---
             if (matchedSong) {
                 // 只要匹配成功 (matchedSong 不为 null)，就无条件使用它
-                logger.info(
+                logger.debug(
                     { id: item.id, source: matchedSong.source || 'Matched Provider', br: matchedSong.br },
                     `[FORCE REPLACE] Using matched source for song ${item.id}. Overwriting Netease response.`
                 );
@@ -661,7 +661,7 @@ const tryMatch = (ctx) => {
             }
 
             // 打印最终将发送给客户端的数据
-            logger.info(
+            logger.debug(
                 {
                     id: item.id,
                     source: matchedSong ? (matchedSong.source || 'Matched Provider') : 'Netease (Original)',

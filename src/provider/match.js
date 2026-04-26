@@ -79,8 +79,29 @@ async function match(id, source, data) {
 	const audioInfo = await find(id, data);
 	let audioData = null;
 
-	if (process.env.SELECT_MAX_BR) {
-		// 策略一：“质量优先”模式 (并行搜索，对比码率)
+	if (FOLLOW_SOURCE_ORDER) {
+		// 策略一（可选）：“顺序优先”模式 (按顺序搜索，找到即停)
+		logger.debug('Using "Source Order" strategy.');
+		for (let i = 0; i < candidate.length; i++) {
+			const source = candidate[i];
+			try {
+				audioData = await getAudioFromSource(source, audioInfo);
+				break;
+			} catch (e) {
+				if (e) {
+					if (e instanceof RequestCancelled) logger.debug(e);
+					else logger.error(e.message || e);
+				}
+			}
+		}
+
+		if (!audioData) {
+			throw new Error('没有找到可用的音源数据!');
+		}
+
+	} else {
+		// 策略二（默认）：“质量优先”模式 (并行搜索，对比码率)
+		logger.debug('Using "Max Bitrate" (quality first) strategy.');
 		let audioDataArr = await Promise.allSettled(
 			candidate.map(async (source) =>
 				getAudioFromSource(source, audioInfo).catch((e) => {
@@ -98,7 +119,7 @@ async function match(id, source, data) {
 		);
 
 		if (audioDataArr.length === 0) {
-			throw new SongNotAvailable('any source');
+			throw new SongNotAvailable('任何可用音源');
 		}
 
 		audioDataArr = audioDataArr.map((result) => result.value);
@@ -107,45 +128,19 @@ async function match(id, source, data) {
 		audioData = audioDataArr.reduce((best, current) =>
 			(current.br || 0) >= (best.br || 0) ? current : best
 		);
-
-	} else if (FOLLOW_SOURCE_ORDER) {
-		// 策略二：“顺序优先”模式 (按顺序搜索，找到即停)
-		for (let i = 0; i < candidate.length; i++) {
-			const source = candidate[i];
-			try {
-				audioData = await getAudioFromSource(source, audioInfo);
-				break;
-			} catch (e) {
-				if (e) {
-					if (e instanceof RequestCancelled) logger.debug(e);
-					else logger.error(e.message || e);
-				}
-			}
-		}
-
-		if (!audioData) {
-			throw new Error('No audioData!');
-		}
-
-	} else {
-		// 策略三：“速度优先”模式 (并行搜索，最快返回的获胜)
-		audioData = await Promise.any(
-			candidate.map(async (source) =>
-				getAudioFromSource(source, audioInfo).catch((e) => {
-					if (e) {
-						if (e instanceof RequestCancelled) logger.debug(e);
-						else logger.error(e.message || e);
-					}
-					throw e;
-				})
-			)
-		);
 	}
 
-	const { id: audioId, name } = audioInfo;
-	const { url } = audioData;
-	logger.debug({ audioInfo, audioData }, 'The data to replace:');
-	logger.debug({ audioId, songName: name, url }, `Replaced: [${audioId}] ${name}`);
+	// 使用 logger.info 打印最终胜出的音源详细信息
+	logger.info(
+		{
+			'歌曲ID': audioInfo.id,
+			'歌名': audioInfo.name,
+			'音源平台': audioData.source,
+			'码率 (bps)': audioData.br,
+			'歌曲链接': audioData.url
+		},
+		`[MATCH SUCCESS] 最终选择的音源:`
+	);
 	return audioData;
 }
 
