@@ -49,18 +49,9 @@ describe('CacheStorage', () => {
 			expect(cs.cacheMap.get('JestAliveTest')).toStrictEqual(
 				aliveTestObject
 			);
-		});
-
-		it('removeExpiredCache() can be called with CLEANUP (cs@cleanup) event.', (done) => {
-			const cs = new CacheStorage();
-
-			cs.on(CacheStorageEvents.CLEANUP, () => {
-				expect(cs.removeExpiredCache).toHaveBeenCalledTimes(1);
-				done();
-			});
-			cs.removeExpiredCache = jest.fn();
-
-			cs.emit(CacheStorageEvents.CLEANUP);
+			
+			// cleanup the timer
+			clearInterval(cs.cleanupInterval);
 		});
 	});
 
@@ -107,21 +98,28 @@ describe('CacheStorage', () => {
 			await cs.cache('owo', mockFunc);
 
 			expect(await cs.cache('owo', mockFunc)).toBe('12345');
+			clearInterval(cs.cleanupInterval);
 		});
 
-		it('cache() can trigger removeExpiredCache()', (done) => {
+		it('cache() will lazily remove expired cache when accessed', async () => {
 			const cs = new CacheStorage();
 			const mockFunc = jest
 				.fn()
 				.mockReturnValue(Promise.resolve().then(() => '12345'));
 
-			cs.on(CacheStorageEvents.CLEANUP, () => {
-				expect(cs.removeExpiredCache).toHaveBeenCalledTimes(1);
-				done();
-			});
-			cs.removeExpiredCache = jest.fn();
+			// Expire it immediately
+			await cs.cache('owo', mockFunc, Date.now() - 1000);
 
-			cs.cache('owo', mockFunc);
+			expect(mockFunc).toHaveBeenCalledTimes(1);
+			expect(cs.cacheMap.size).toBe(1);
+
+			// Access again, should trigger lazy removal and re-fetch
+			await cs.cache('owo', mockFunc);
+
+			expect(mockFunc).toHaveBeenCalledTimes(2);
+			expect(cs.cacheMap.size).toBe(1);
+			
+			clearInterval(cs.cleanupInterval);
 		});
 	});
 });

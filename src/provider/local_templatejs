@@ -30,7 +30,7 @@ const format = (songData) => {
  * @returns {Promise<object>}
  */
 
-const search = (info) => {
+const search = async (info) => {
     // 直接使用 info 中的信息，避免解析 keyword 字符串
     const songName = info.name.trim();
     const artist = info.artists.map(a => a.name).join('、').trim(); // 支持多位歌手
@@ -45,20 +45,19 @@ const search = (info) => {
         'X-API-Key': ''
     };
 
-    return request('GET', url, headers)
-        .then(response => response.json())
-        .then(jsonBody => {
-            if (jsonBody.code === 200 && jsonBody.data) {
-                if (Array.isArray(jsonBody.data)) {
-                    const matchedSong = select(jsonBody.data, info);
-                    return format(matchedSong);
-                } else {
-                    return format(jsonBody.data);
-                }
-            } else {
-                return Promise.reject(new Error(jsonBody.error || '未找到本地歌曲'));
-            }
-        });
+    const response = await request('GET', url, headers);
+    const jsonBody = await response.json();
+
+    if (jsonBody.code === 200 && jsonBody.data) {
+        if (Array.isArray(jsonBody.data)) {
+            const matchedSong = select(jsonBody.data, info);
+            return format(matchedSong);
+        } else {
+            return format(jsonBody.data);
+        }
+    } else {
+        throw new Error(jsonBody.error || '未找到本地歌曲');
+    }
 };
 
 /**
@@ -66,7 +65,7 @@ const search = (info) => {
  * @param {object} matchedSong - 从 search 函数返回的已匹配对象
  * @returns {Promise<string>}
  */
-const track = (matchedSong) => {
+const track = async (matchedSong) => {
     const baseUrl = 'https://cdn-musicapi.010920.xyz';
     const fullUrl = baseUrl + matchedSong.downloadUrl;
     return fullUrl;
@@ -83,9 +82,9 @@ cs.aliveDuration = 24 * 60 * 60 * 1000;
  * @param {object} info - 包含关键词、可选专辑名和时长的对象
  * @param {string} apiKey - API密钥
  */
-const check = (info) =>
-    cs.cache(info, () => search(info))
-        .then(track);
+const check = async (info) => {
+    const matchedSong = await cs.cache(info, () => search(info));
+    return track(matchedSong);
+};
 
 module.exports = { check, track };
-

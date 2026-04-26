@@ -20,7 +20,7 @@ const format = (song) => {
 	};
 };
 
-const search = (info) => {
+const search = async (info) => {
 	const url =
 		// 'http://songsearch.kugou.com/song_search_v2?' +
 		'http://mobilecdn.kugou.com/api/v3/search/song?' +
@@ -28,18 +28,20 @@ const search = (info) => {
 		encodeURIComponent(info.keyword) +
 		'&page=1&pagesize=10';
 
-	return request('GET', url)
-		.then((response) => response.json())
-		.then((jsonBody) => {
-			// const list = jsonBody.data.lists.map(format)
-			const list = jsonBody.data.info.map(format);
-			const matched = select(list, info);
-			return matched ? matched : Promise.reject();
-		})
-		.catch(() => insure().kugou.search(info));
+	try {
+		const response = await request('GET', url);
+		const jsonBody = await response.json();
+		// const list = jsonBody.data.lists.map(format)
+		const list = jsonBody.data.info.map(format);
+		const matched = select(list, info);
+		if (matched) return matched;
+		return Promise.reject();
+	} catch (e) {
+		return insure().kugou.search(info);
+	}
 };
 
-const single = (song, format) => {
+const single = async (song, format) => {
 	const getHashId = () => {
 		switch (format) {
 			case 'hash':
@@ -63,21 +65,35 @@ const single = (song, format) => {
 		'&' +
 		'appid=1005&pid=2&cmd=25&behavior=play&album_id=' +
 		song.album.id;
-	return request('GET', url)
-		.then((response) => response.json())
-		.then((jsonBody) => jsonBody.url[0] || Promise.reject());
+		
+	const response = await request('GET', url);
+	const jsonBody = await response.json();
+	if (jsonBody.url[0]) return jsonBody.url[0];
+	return Promise.reject();
 };
 
-const track = (song) =>
-	Promise.all(
-		['sqhash', 'hqhash', 'hash']
-			.slice(select.ENABLE_FLAC ? 0 : 1)
-			.map((format) => single(song, format).catch(() => null))
-	)
-		.then((result) => result.find((url) => url) || Promise.reject())
-		.catch(() => insure().kugou.track(song));
+const track = async (song) => {
+	try {
+		const formats = ['sqhash', 'hqhash', 'hash'].slice(select.ENABLE_FLAC ? 0 : 1);
+		const promises = formats.map(async (format) => {
+			try {
+				return await single(song, format);
+			} catch (e) {
+				return null;
+			}
+		});
+		const result = await Promise.all(promises);
+		const url = result.find((u) => u);
+		if (url) return url;
+		return Promise.reject();
+	} catch (e) {
+		return insure().kugou.track(song);
+	}
+};
 
 const cs = getManagedCacheStorage('provider/kugou');
-const check = (info) => cs.cache(info, () => search(info)).then(track);
+const check = async (info) => {
+	return track(await cs.cache(info, () => search(info)));
+};
 
 module.exports = { check, search };

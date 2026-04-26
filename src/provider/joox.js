@@ -34,7 +34,7 @@ const format = (song) => {
 	};
 };
 
-const search = (info) => {
+const search = async (info) => {
 	const keyword = fit(info);
 	const url =
 		'http://api-jooxtt.sanook.com/web-fcgi-bin/web_search?' +
@@ -43,17 +43,16 @@ const search = (info) => {
 		encodeURIComponent(keyword) +
 		'&sin=0&ein=30';
 
-	return request('GET', url, headers)
-		.then((response) => response.body())
-		.then((body) => {
-			const jsonBody = JSON.parse(body.replace(/'/g, '"'));
-			const list = jsonBody.itemlist.map(format);
-			const matched = select(list, info);
-			return matched ? matched.id : Promise.reject();
-		});
+	const response = await request('GET', url, headers);
+	const body = await response.body();
+	const jsonBody = JSON.parse(body.replace(/'/g, '"'));
+	const list = jsonBody.itemlist.map(format);
+	const matched = select(list, info);
+	if (matched) return matched.id;
+	return Promise.reject();
 };
 
-const track = (id) => {
+const track = async (id) => {
 	const url =
 		'http://api.joox.com/web-fcgi-bin/web_get_songinfo?' +
 		'songid=' +
@@ -62,22 +61,25 @@ const track = (id) => {
 		'channel_id=-1&_=' +
 		new Date().getTime();
 
-	return request('GET', url, headers)
-		.then((response) => response.jsonp())
-		.then((jsonBody) => {
-			const songUrl = (
-				jsonBody.r320Url ||
-				jsonBody.r192Url ||
-				jsonBody.mp3Url ||
-				jsonBody.m4aUrl
-			).replace(/M\d00([\w]+).mp3/, 'M800$1.mp3');
-			if (songUrl) return songUrl;
-			else return Promise.reject();
-		})
-		.catch(() => insure().joox.track(id));
+	try {
+		const response = await request('GET', url, headers);
+		const jsonBody = await response.jsonp();
+		const songUrl = (
+			jsonBody.r320Url ||
+			jsonBody.r192Url ||
+			jsonBody.mp3Url ||
+			jsonBody.m4aUrl
+		).replace(/M\d00([\w]+).mp3/, 'M800$1.mp3');
+		if (songUrl) return songUrl;
+		return Promise.reject();
+	} catch (e) {
+		return insure().joox.track(id);
+	}
 };
 
 const cs = getManagedCacheStorage('provider/joox');
-const check = (info) => cs.cache(info, () => search(info)).then(track);
+const check = async (info) => {
+	return track(await cs.cache(info, () => search(info)));
+};
 
 module.exports = { check, track };

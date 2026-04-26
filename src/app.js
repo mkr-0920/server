@@ -168,26 +168,30 @@ const dnsLookup = (host) =>
 				: resolve(records.map((record) => record.address))
 		)
 	);
-
-const httpdns = (host) =>
-	request('POST', 'http://music.httpdns.c.163.com/d', {}, host)
-		.then((response) => response.json())
-		.then((jsonBody) =>
-			jsonBody.dns.reduce(
-				(result, domain) => result.concat(domain.ips),
-				[]
-			)
+const httpdns = async (host) => {
+	try {
+		const response = await request('POST', 'http://music.httpdns.c.163.com/d', {}, host);
+		const jsonBody = await response.json();
+		return jsonBody.dns.reduce(
+			(result, domain) => result.concat(domain.ips),
+			[]
 		);
+	} catch (e) {
+		return [];
+	}
+};
 
-const httpdns2 = (host) =>
-	request('GET', 'http://httpdns.n.netease.com/httpdns/v2/d?domain=' + host)
-		.then((response) => response.json())
-		.then((jsonBody) =>
-			Object.keys(jsonBody.data)
-				.map((key) => jsonBody.data[key])
-				.reduce((result, value) => result.concat(value.ip || []), [])
-		);
-
+const httpdns2 = async (host) => {
+	try {
+		const response = await request('GET', 'http://httpdns.n.netease.com/httpdns/v2/d?domain=' + host);
+		const jsonBody = await response.json();
+		return Object.keys(jsonBody.data)
+			.map((key) => jsonBody.data[key])
+			.reduce((result, value) => result.concat(value.ip || []), []);
+	} catch (e) {
+		return [];
+	}
+};
 // 注意：HTTPDNS功能似乎已损坏，不建议开启
 const dnsSource =
 	process.env.ENABLE_HTTPDNS === 'true' ? [httpdns, httpdns2] : [];
@@ -201,10 +205,11 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 // 并行执行所有DNS查询，以扩充域名白名单
-Promise.all(
-	dnsSource.map((query) => query(target.join(','))).concat(target.map(dnsLookup))
-)
-	.then((result) => {
+(async () => {
+	try {
+		const result = await Promise.all(
+			dnsSource.map((query) => query(target.join(','))).concat(target.map(dnsLookup))
+		);
 		const { host } = hook.target;
 		// 将DNS查询到的IP地址和CNAME域名也加入到hook的目标中
 		result.forEach((array) => array.forEach(host.add, host));
@@ -236,8 +241,8 @@ Promise.all(
 		if (global.cnrelay) {
 			logger.info(`CNRelay is enabled: ${global.cnrelay}`);
 		}
-	})
-	.catch((error) => {
+	} catch (error) {
 		console.error('启动失败:', error);
 		process.exit(1);
-	});
+	}
+})();

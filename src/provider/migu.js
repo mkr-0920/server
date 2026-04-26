@@ -23,23 +23,22 @@ const format = (song) => {
 	};
 };
 
-const search = (info) => {
+const search = async (info) => {
 	const url =
 		'https://m.music.migu.cn/migu/remoting/scr_search_tag?' +
 		'keyword=' +
 		encodeURIComponent(info.keyword) +
 		'&type=2&rows=20&pgc=1';
 
-	return request('GET', url, headers)
-		.then((response) => response.json())
-		.then((jsonBody) => {
-			const list = ((jsonBody || {}).musics || []).map(format);
-			const matched = select(list, info);
-			return matched ? matched.id : Promise.reject();
-		});
+	const response = await request('GET', url, headers);
+	const jsonBody = await response.json();
+	const list = ((jsonBody || {}).musics || []).map(format);
+	const matched = select(list, info);
+	if (matched) return matched.id;
+	return Promise.reject();
 };
 
-const single = (id, format) => {
+const single = async (id, format) => {
 	// const url =
 	//	'https://music.migu.cn/v3/api/music/audioPlayer/getPlayInfo?' +
 	//	'dataType=2&' + crypto.miguapi.encryptBody({copyrightId: id.toString(), type: format})
@@ -51,28 +50,36 @@ const single = (id, format) => {
 		'&toneFlag=' +
 		format;
 
-	return request('GET', url, headers)
-		.then((response) => response.json())
-		.then((jsonBody) => {
-			// const {playUrl} = jsonBody.data
-			// return playUrl ? encodeURI('http:' + playUrl) : Promise.reject()
-			const { audioFormatType } = jsonBody.data;
-			if (audioFormatType !== format) return Promise.reject();
-			else return url ? jsonBody.data.url : Promise.reject();
-		});
+	const response = await request('GET', url, headers);
+	const jsonBody = await response.json();
+	const { audioFormatType } = jsonBody.data;
+	if (audioFormatType !== format) return Promise.reject();
+	if (url) return jsonBody.data.url;
+	return Promise.reject();
 };
 
-const track = (id) =>
-	Promise.all(
-		// [3, 2, 1].slice(select.ENABLE_FLAC ? 0 : 1)
-		['ZQ24', 'SQ', 'HQ', 'PQ']
-			.slice(select.ENABLE_FLAC ? 0 : 2)
-			.map((format) => single(id, format).catch(() => null))
-	)
-		.then((result) => result.find((url) => url) || Promise.reject())
-		.catch(() => insure().migu.track(id));
+const track = async (id) => {
+	try {
+		const formats = ['ZQ24', 'SQ', 'HQ', 'PQ'].slice(select.ENABLE_FLAC ? 0 : 2);
+		const promises = formats.map(async (format) => {
+			try {
+				return await single(id, format);
+			} catch (e) {
+				return null;
+			}
+		});
+		const result = await Promise.all(promises);
+		const url = result.find((u) => u);
+		if (url) return url;
+		return Promise.reject();
+	} catch (e) {
+		return insure().migu.track(id);
+	}
+};
 
 const cs = getManagedCacheStorage('provider/migu');
-const check = (info) => cs.cache(info, () => search(info)).then(track);
+const check = async (info) => {
+	return track(await cs.cache(info, () => search(info)));
+};
 
 module.exports = { check, track };

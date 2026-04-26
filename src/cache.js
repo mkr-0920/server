@@ -39,11 +39,11 @@ class CacheStorage extends EventEmitter {
 		// Set the ID of this cache storage.
 		if (id) this.id = id;
 
-		// Register the CLEANUP event. It will clean up
-		// the expired cache when emitting "CLEANUP" event.
-		this.on(CacheStorageEvents.CLEANUP, async () =>
-			this.removeExpiredCache()
-		);
+		// Run background cleanup task every 10 minutes to prevent memory leak
+		// from expired caches that are never accessed again.
+		this.cleanupInterval = setInterval(() => {
+			this.removeExpiredCache();
+		}, 10 * 60 * 1000).unref();
 	}
 
 	/**
@@ -75,10 +75,11 @@ class CacheStorage extends EventEmitter {
 	removeExpiredCache() {
 		logger.debug(
 			this.getLoggerContext(),
-			'Cleaning up the expired caches...'
+			'Background task: Cleaning up the expired caches...'
 		);
+		const now = Date.now();
 		this.cacheMap.forEach((cachedData, key) => {
-			if (cachedData.expireAt <= Date.now()) this.cacheMap.delete(key);
+			if (cachedData.expireAt <= now) this.cacheMap.delete(key);
 		});
 	}
 
@@ -97,13 +98,10 @@ class CacheStorage extends EventEmitter {
 			return action();
 		}
 
-		// Push the CLEANUP task to the event loop - "polling",
-		// so that it won't block the cache() task.
-		this.emit(CacheStorageEvents.CLEANUP);
-
 		// Check if we have cached it before.
 		// If true, we return the cached value.
 		const cachedData = this.cacheMap.get(key);
+		const now = Date.now();
 
 		// Object.toString() can't bring any useful information,
 		// we show "Something" instead.
@@ -114,9 +112,16 @@ class CacheStorage extends EventEmitter {
 			logKey,
 		});
 
+		// Lazy expiration: Check if the cached data is expired when accessing it.
 		if (cachedData) {
-			logger.debug(logCtx, `${logKey} hit!`);
-			return cachedData.data;
+			if (cachedData.expireAt > now) {
+				logger.debug(logCtx, `${logKey} hit!`);
+				return cachedData.data;
+			} else {
+				// The cache is expired, remove it.
+				logger.debug(logCtx, `${logKey} expired, removing from cache.`);
+				this.cacheMap.delete(key);
+			}
 		}
 
 		// Cache the response of action() and

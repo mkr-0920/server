@@ -208,15 +208,24 @@ const read = (connect, raw) =>
 	}).then((buffer) => {
 		if (buffer.length) {
 			// 根据 content-encoding 自动解压缩
-			switch (connect.headers['content-encoding']) {
-				case 'deflate':
-				case 'gzip':
-					buffer = zlib.unzipSync(buffer);
-					break;
-				case 'br':
-					buffer = zlib.brotliDecompressSync(buffer);
-					break;
-			}
+			return new Promise((resolve, reject) => {
+				const cb = (err, result) => {
+					if (err) return reject(err);
+					resolve(raw ? result : result.toString());
+				};
+				switch (connect.headers['content-encoding']) {
+					case 'deflate':
+					case 'gzip':
+						zlib.unzip(buffer, cb);
+						break;
+					case 'br':
+						zlib.brotliDecompress(buffer, cb);
+						break;
+					default:
+						resolve(raw ? buffer : buffer.toString());
+						break;
+				}
+			});
 		}
 		return raw ? buffer : buffer.toString();
 	});

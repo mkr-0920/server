@@ -50,27 +50,27 @@ const getFormatData = (data) => {
 	}
 };
 
-const find = (id, data) => {
+const find = async (id, data) => {
 	if (data) {
 		const info = getFormatData(data);
-		return info.name ? Promise.resolve(info) : Promise.reject();
+		if (info.name) return info;
+		return Promise.reject();
 	} else {
 		const url = 'https://music.163.com/api/song/detail?ids=[' + id + ']';
-		return request('GET', url)
-			.then((response) => response.json())
-			.then((jsonBody) => {
-				if (jsonBody && jsonBody.songs && jsonBody.songs.length) {
-					const info = getFormatData(jsonBody.songs[0]);
-					return info.name ? info : Promise.reject();
-				}
-				return Promise.reject();
-			});
+		const response = await request('GET', url);
+		const jsonBody = await response.json();
+		if (jsonBody && jsonBody.songs && jsonBody.songs.length) {
+			const info = getFormatData(jsonBody.songs[0]);
+			if (info.name) return info;
+			return Promise.reject();
+		}
+		return Promise.reject();
 	}
 };
 
 const cs = getManagedCacheStorage('provider/find');
 
-module.exports = (id, data) => {
+module.exports = async (id, data) => {
 	if (data) {
 		return find(id, data);
 	} else {

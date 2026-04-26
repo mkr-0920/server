@@ -35,7 +35,7 @@ const proxy = {
 		 * @param {http.IncomingMessage} req
 		 * @param {http.ServerResponse} res
 		 */
-		mitm: (req, res) => {
+		mitm: async (req, res) => {
 			// 特殊情况：处理代理自动配置 (PAC) 文件请求
 			if (req.url === '/proxy.pac') {
 				// 核心修改：使用 new URL() 替换 url.parse()
@@ -56,16 +56,18 @@ const proxy = {
 			} else {
 				// 标准HTTP请求处理流程
 				const ctx = { res, req };
-				Promise.resolve()
-					.then(() => proxy.protect(ctx)) // 1. 挂载错误处理器
-					.then(() => proxy.authenticate(ctx)) // 2. 代理身份认证
-					.then(() => hook.request.before(ctx)) // 3. 执行前置钩子 (我们的核心逻辑)
-					.then(() => proxy.filter(ctx)) // 4. 黑白名单过滤
-					.then(() => proxy.log(ctx)) // 5. 记录请求日志
-					.then(() => proxy.mitm.request(ctx)) // 6. 转发请求到目标服务器
-					.then(() => hook.request.after(ctx)) // 7. 执行后置钩子 (我们的核心逻辑)
-					.then(() => proxy.mitm.response(ctx)) // 8. 将响应返回给客户端
-					.catch(() => proxy.mitm.close(ctx)); // 捕获异常并关闭连接
+				try {
+					await proxy.protect(ctx); // 1. 挂载错误处理器
+					await proxy.authenticate(ctx); // 2. 代理身份认证
+					await hook.request.before(ctx); // 3. 执行前置钩子 (我们的核心逻辑)
+					await proxy.filter(ctx); // 4. 黑白名单过滤
+					await proxy.log(ctx); // 5. 记录请求日志
+					await proxy.mitm.request(ctx); // 6. 转发请求到目标服务器
+					await hook.request.after(ctx); // 7. 执行后置钩子 (我们的核心逻辑)
+					await proxy.mitm.response(ctx); // 8. 将响应返回给客户端
+				} catch (error) {
+					proxy.mitm.close(ctx); // 捕获异常并关闭连接
+				}
 			}
 		},
 		/**
@@ -74,19 +76,21 @@ const proxy = {
 		 * @param {net.Socket} socket
 		 * @param {Buffer} head
 		 */
-		tunnel: (req, socket, head) => {
+		tunnel: async (req, socket, head) => {
 			const ctx = { req, socket, head };
-			Promise.resolve()
-				.then(() => proxy.protect(ctx)) // 1. 挂载错误处理器
-				.then(() => proxy.authenticate(ctx)) // 2. 代理身份认证
-				.then(() => hook.connect.before(ctx)) // 3. 执行连接前置钩子
-				.then(() => proxy.filter(ctx)) // 4. 黑白名单过滤
-				.then(() => proxy.log(ctx)) // 5. 记录请求日志
-				.then(() => proxy.tunnel.connect(ctx)) // 6. 连接到目标服务器
-				.then(() => proxy.tunnel.dock(ctx)) // 7. 与客户端握手并获取SNI
-				.then(() => hook.negotiate.before(ctx)) // 8. 执行协商钩子
-				.then(() => proxy.tunnel.pipe(ctx)) // 9. 建立双向数据管道
-				.catch(() => proxy.tunnel.close(ctx)); // 捕获异常并关闭连接
+			try {
+				await proxy.protect(ctx); // 1. 挂载错误处理器
+				await proxy.authenticate(ctx); // 2. 代理身份认证
+				await hook.connect.before(ctx); // 3. 执行连接前置钩子
+				await proxy.filter(ctx); // 4. 黑白名单过滤
+				await proxy.log(ctx); // 5. 记录请求日志
+				await proxy.tunnel.connect(ctx); // 6. 连接到目标服务器
+				await proxy.tunnel.dock(ctx); // 7. 与客户端握手并获取SNI
+				await hook.negotiate.before(ctx); // 8. 执行协商钩子
+				await proxy.tunnel.pipe(ctx); // 9. 建立双向数据管道
+			} catch (error) {
+				proxy.tunnel.close(ctx); // 捕获异常并关闭连接
+			}
 		},
 	},
 

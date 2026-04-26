@@ -10,7 +10,7 @@ const { logScope } = require('../logger');
 
 const logger = logScope('provider/qq');
 
-const fetchTrackFromAPI = (info) => {
+const fetchTrackFromAPI = async (info) => {
     const songName = info.name;
     const artistName = info.artists.map(artist => artist.name).join(' / ');
     const albumName = info.album ? info.album.name : null;
@@ -25,50 +25,54 @@ const fetchTrackFromAPI = (info) => {
         'X-API-Key': ''
     };
 
-    return request('GET', url, headers)
-        .then(response => {
-            if (response.statusCode < 200 || response.statusCode > 299) {
-                throw new Error(`您的自定义API [${url}] 返回了错误状态码: ${response.statusCode}`);
-            }
-            return response.json().catch(async () => {
-                const rawBody = await response.text();
-                logger.error({ rawBody }, '无法将您的自定义API响应解析为JSON。');
-                throw new Error('从您的自定义API收到了无效的JSON响应。');
-            });
-        })
-        .then(jsonBody => {
-            if (jsonBody && jsonBody.code === 200 && jsonBody.data && jsonBody.data.urls) {
-                const musicUrls = jsonBody.data.urls;
-                let selectedUrl = null;
+    try {
+        const response = await request('GET', url, headers);
+        if (response.statusCode < 200 || response.statusCode > 299) {
+            throw new Error(`您的自定义API [${url}] 返回了错误状态码: ${response.statusCode}`);
+        }
+        
+        let jsonBody;
+        try {
+            jsonBody = await response.json();
+        } catch (e) {
+            const rawBody = await response.text();
+            logger.error({ rawBody }, '无法将您的自定义API响应解析为JSON。');
+            throw new Error('从您的自定义API收到了无效的JSON响应。');
+        }
 
-                // 按“母带 > 无损 > 320k > 128k”的优先级选择音源URL
-                if (musicUrls.master) {
-                    selectedUrl = musicUrls.master;
-                } else if (musicUrls.flac) {
-                    selectedUrl = musicUrls.flac;
-                } else if (musicUrls['320']) {
-                    selectedUrl = musicUrls['320'];
-                } else if (musicUrls['128']) {
-                    selectedUrl = musicUrls['128'];
-                }
+        if (jsonBody && jsonBody.code === 200 && jsonBody.data && jsonBody.data.urls) {
+            const musicUrls = jsonBody.data.urls;
+            let selectedUrl = null;
 
-                if (selectedUrl) {
-                    return {
-                        url: selectedUrl
-                    };
-                }
+            // 按“母带 > 无损 > 320k > 128k”的优先级选择音源URL
+            if (musicUrls.master) {
+                selectedUrl = musicUrls.master;
+            } else if (musicUrls.flac) {
+                selectedUrl = musicUrls.flac;
+            } else if (musicUrls['320']) {
+                selectedUrl = musicUrls['320'];
+            } else if (musicUrls['128']) {
+                selectedUrl = musicUrls['128'];
             }
-            
-            throw new Error('未在您的API响应中找到有效的播放链接');
-        })
-        .catch(error => {
-            logger.error(error, `请求您的自定义API失败: ${info.name}`);
-            throw error;
-        });
+
+            if (selectedUrl) {
+                return {
+                    url: selectedUrl
+                };
+            }
+        }
+        
+        throw new Error('未在您的API响应中找到有效的播放链接');
+    } catch (error) {
+        logger.error(error, `请求您的自定义API失败: ${info.name}`);
+        throw error;
+    }
 };
 
 const cs = getManagedCacheStorage('provider/qq');
 
-const check = (info) => cs.cache(info, () => fetchTrackFromAPI(info));
+const check = async (info) => {
+	return fetchTrackFromAPI(info);
+};
 
 module.exports = { check };

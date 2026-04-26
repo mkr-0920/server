@@ -16,50 +16,29 @@ const format = (song) => ({
 	})),
 });
 
-const search = (info) => {
-	// const keyword = encodeURIComponent(info.keyword.replace(' - ', ' '));
-	// const url = `http://www.kuwo.cn/api/www/search/searchMusicBykeyWord?key=${keyword}&pn=1&rn=30`;
-	// const cookie = process.env.KUWO_COOKIE || null;
-
-	// return request('GET', url, {
-	// 	referer: `http://www.kuwo.cn/search/list?key=${keyword}`,
-	// 	secret: cookie
-	// 		? (cookie.match(/Secret=([0-9a-f]{72})/) || [])[1]
-	// 		: null,
-	// 	cookie,
-	// })
-	// 	.then((response) => response.json())
-	// 	.then((jsonBody) => {
-	// 		if (!jsonBody || jsonBody.code !== 200 || jsonBody.data.total < 1)
-	// 			return Promise.reject();
-	// 		const list = jsonBody.data.list.map(format);
-	// 		const matched = select(list, info);
-	// 		return matched ? matched.id : Promise.reject();
-	// 	});
-
+const search = async (info) => {
 	const keyword = encodeURIComponent(info.keyword.replace(' - ', ' '));
 	const url =
 		'http://search.kuwo.cn/r.s?&correct=1&vipver=1&stype=comprehensive&encoding=utf8' +
 		'&rformat=json&mobi=1&show_copyright_off=1&searchapi=6&all=' +
 		keyword;
 
-	return request('GET', url)
-		.then((response) => response.json())
-		.then((jsonBody) => {
-			if (
-				!jsonBody ||
-				jsonBody.content.length < 2 ||
-				!jsonBody.content[1].musicpage ||
-				jsonBody.content[1].musicpage.abslist.length < 1
-			)
-				return Promise.reject();
-			const list = jsonBody.content[1].musicpage.abslist.map(format);
-			const matched = select(list, info);
-			return matched ? matched.id : Promise.reject();
-		});
+	const response = await request('GET', url);
+	const jsonBody = await response.json();
+	if (
+		!jsonBody ||
+		jsonBody.content.length < 2 ||
+		!jsonBody.content[1].musicpage ||
+		jsonBody.content[1].musicpage.abslist.length < 1
+	)
+		return Promise.reject();
+	const list = jsonBody.content[1].musicpage.abslist.map(format);
+	const matched = select(list, info);
+	if (matched) return matched.id;
+	return Promise.reject();
 };
 
-const track = (id) => {
+const track = async (id) => {
 	const url = crypto.kuwoapi
 		? 'http://mobi.kuwo.cn/mobi.s?f=kuwo&q=' +
 			crypto.kuwoapi.encryptQuery(
@@ -72,18 +51,21 @@ const track = (id) => {
 			)
 		: 'http://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3&response=url&rid=MUSIC_' +
 			id; // flac refuse
-	// : 'http://www.kuwo.cn/url?format=mp3&response=url&type=convert_url3&br=320kmp3&rid=' + id // flac refuse
 
-	return request('GET', url, { 'user-agent': 'okhttp/3.10.0' })
-		.then((response) => response.body())
-		.then((body) => {
-			const url = (body.match(/http[^\s$"]+/) || [])[0];
-			return url || Promise.reject();
-		})
-		.catch(() => insure().kuwo.track(id));
+	try {
+		const response = await request('GET', url, { 'user-agent': 'okhttp/3.10.0' });
+		const body = await response.body();
+		const matchUrl = (body.match(/http[^\s$"]+/) || [])[0];
+		if (matchUrl) return matchUrl;
+		return Promise.reject();
+	} catch (e) {
+		return insure().kuwo.track(id);
+	}
 };
 
 const cs = getManagedCacheStorage('provider/kuwo');
-const check = (info) => cs.cache(info, () => search(info)).then(track);
+const check = async (info) => {
+	return track(await cs.cache(info, () => search(info)));
+};
 
 module.exports = { check, track };

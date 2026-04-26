@@ -16,40 +16,42 @@ const format = (song) => {
 	};
 };
 
-const search = (info) => {
+const search = async (info) => {
 	const url =
 		'https://api.bilibili.com/audio/music-service-c/s?' +
 		'search_type=music&page=1&pagesize=30&' +
 		`keyword=${encodeURIComponent(info.keyword)}`;
-	return request('GET', url)
-		.then((response) => response.json())
-		.then((jsonBody) => {
-			const list = jsonBody.data.result.map(format);
-			const matched = select(list, info);
-			return matched ? matched.id : Promise.reject();
-		});
+	const response = await request('GET', url);
+	const jsonBody = await response.json();
+	const list = jsonBody.data.result.map(format);
+	const matched = select(list, info);
+	if (matched) return matched.id;
+	return Promise.reject();
 };
 
-const track = (id) => {
+const track = async (id) => {
 	const url =
 		'https://www.bilibili.com/audio/music-service-c/web/url?rivilege=2&quality=2&' +
 		'sid=' +
 		id;
 
-	return request('GET', url)
-		.then((response) => response.json())
-		.then((jsonBody) => {
-			if (jsonBody.code === 0) {
-				// bilibili music requires referer, connect do not support referer, so change to http
-				return jsonBody.data.cdns[0].replace('https', 'http');
-			} else {
-				return Promise.reject();
-			}
-		})
-		.catch(() => insure().bilibili.track(id));
+	try {
+		const response = await request('GET', url);
+		const jsonBody = await response.json();
+		if (jsonBody.code === 0) {
+			// bilibili music requires referer, connect do not support referer, so change to http
+			return jsonBody.data.cdns[0].replace('https', 'http');
+		} else {
+			return Promise.reject();
+		}
+	} catch (e) {
+		return insure().bilibili.track(id);
+	}
 };
 
 const cs = getManagedCacheStorage('provider/bilibili');
-const check = (info) => cs.cache(info, () => search(info)).then(track);
+const check = async (info) => {
+	return track(await cs.cache(info, () => search(info)));
+};
 
 module.exports = { check, track };

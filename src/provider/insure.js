@@ -7,7 +7,7 @@ module.exports = () => {
 			target.route = (target.route || []).concat(property);
 			return proxy;
 		},
-		apply: (target, _, payload) => {
+		apply: async (target, _, payload) => {
 			if (module.exports.disable || !host) return Promise.reject();
 			const path = target.route.join('/');
 			const query =
@@ -15,10 +15,8 @@ module.exports = () => {
 					? JSON.stringify(payload[0])
 					: payload[0];
 			// if (path != 'qq/ticket') return Promise.reject()
-			return request(
-				'GET',
-				`${host}/${path}?${encodeURIComponent(query)}`
-			).then((response) => response.body());
+			const response = await request('GET', `${host}/${path}?${encodeURIComponent(query)}`);
+			return await response.body();
 		},
 	});
 	return proxy;

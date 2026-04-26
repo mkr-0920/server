@@ -6,10 +6,19 @@
  * @return {boolean}
  */
 const isHost = (url, host) => {
-	// FIXME: Due to #118, we can only check the url
-	// 		  by .includes(). You are welcome to fix
-	//        it (CWE-20).
-	return url.includes(host);
+	if (!url || typeof url !== 'string') return false;
+
+	let hostname = '';
+	try {
+		// Try to parse it as a full URL
+		hostname = new URL(url).hostname;
+	} catch (e) {
+		// Fallback for raw hostnames or proxy CONNECT strings (e.g., 'music.163.com:443')
+		// This also safely handles relative paths (returning empty string)
+		hostname = url.split('/')[0].split(':')[0];
+	}
+
+	return hostname === host || hostname.endsWith(`.${host}`);
 };
 
 /**

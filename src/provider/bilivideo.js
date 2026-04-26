@@ -101,83 +101,80 @@ const format = (song) => {
 const getBiliVideoHeader = async () => {
 	const url = 'https://www.bilibili.com';
 
-	return cs.cache('bilicookie', () =>
-		request('GET', url).then((response) =>
-			response.headers['set-cookie']
-				.map((cookie) => cookie.split(';')[0])
-				.join('; ')
-		)
-	);
-};
-
-const search = (info) => {
-	return getBiliVideoHeader().then((cookies) => {
-		return signParam({
-			search_type: 'video',
-			keyword: info.keyword,
-		}).then((param) => {
-			const url =
-				'https://api.bilibili.com/x/web-interface/wbi/search/type?' +
-				param;
-			return request('GET', url, {
-				cookie: cookies,
-				referer: 'https://search.bilibili.com',
-			})
-				.then((response) => response.json())
-				.then((jsonBody) => {
-					const list = jsonBody.data.result.map(format);
-					const matched = select(list, info);
-
-					return matched ? matched.id : Promise.reject();
-				});
-		});
+	return cs.cache('bilicookie', async () => {
+		const response = await request('GET', url);
+		return response.headers['set-cookie']
+			.map((cookie) => cookie.split(';')[0])
+			.join('; ');
 	});
 };
 
-const track = (id) => {
-	return signParam({ bvid: id }).then((param) => {
-		const url =
-			'https://api.bilibili.com/x/web-interface/wbi/view?' + param;
+const search = async (info) => {
+	const cookies = await getBiliVideoHeader();
+	const param = await signParam({
+		search_type: 'video',
+		keyword: info.keyword,
+	});
+	const url =
+		'https://api.bilibili.com/x/web-interface/wbi/search/type?' +
+		param;
+	const response = await request('GET', url, {
+		cookie: cookies,
+		referer: 'https://search.bilibili.com',
+	});
+	const jsonBody = await response.json();
+	const list = jsonBody.data.result.map(format);
+	const matched = select(list, info);
 
-		return request('GET', url)
-			.then((response) => response.json())
-			.then((jsonBody) => {
-				if (jsonBody.code === 0) {
-					// bilibili music requires referer, connect do not support referer, so change to http
+	if (matched) return matched.id;
+	return Promise.reject();
+};
 
-					return signParam({
-						bvid: id,
-						cid: jsonBody.data.cid,
-						fnval: 16,
-						platform: 'pc',
-					}).then((param) => {
-						const url =
-							'https://api.bilibili.com/x/player/wbi/playurl?' +
-							param;
+const track = async (id) => {
+	try {
+		const param1 = await signParam({ bvid: id });
+		const url1 =
+			'https://api.bilibili.com/x/web-interface/wbi/view?' + param1;
 
-						return request('GET', url)
-							.then((response) => response.json())
-							.then((jsonBody) => {
-								if (jsonBody.code === 0) {
-									if (jsonBody.data.dash.audio != null) {
-										return jsonBody.data.dash.audio[0]
-											.base_url;
-									}
-									return Promise.reject();
-								} else {
-									return Promise.reject();
-								}
-							})
-							.catch(() => insure().bilibili.track(id));
-					});
+		const response1 = await request('GET', url1);
+		const jsonBody1 = await response1.json();
+		
+		if (jsonBody1.code === 0) {
+			const param2 = await signParam({
+				bvid: id,
+				cid: jsonBody1.data.cid,
+				fnval: 16,
+				platform: 'pc',
+			});
+			const url2 =
+				'https://api.bilibili.com/x/player/wbi/playurl?' +
+				param2;
+
+			try {
+				const response2 = await request('GET', url2);
+				const jsonBody2 = await response2.json();
+				if (jsonBody2.code === 0) {
+					if (jsonBody2.data.dash.audio != null) {
+						return jsonBody2.data.dash.audio[0]
+							.base_url;
+					}
+					return Promise.reject();
 				} else {
 					return Promise.reject();
 				}
-			})
-			.catch(() => insure().bilibili.track(id));
-	});
+			} catch (e) {
+				return insure().bilibili.track(id);
+			}
+		} else {
+			return Promise.reject();
+		}
+	} catch (e) {
+		return insure().bilibili.track(id);
+	}
 };
 
-const check = (info) => cs.cache(info, () => search(info)).then(track);
+const check = async (info) => {
+	return track(await cs.cache(info, () => search(info)));
+};
 
 module.exports = { check, track };
