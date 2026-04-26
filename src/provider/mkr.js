@@ -1,0 +1,63 @@
+const select = require('./select');
+const request = require('../request');
+const { getManagedCacheStorage } = require('../cache');
+
+const api_key = process.env.MKR_API_KEY || '';
+
+const format = (song) => ({
+	id: song.id,
+	name: song.name,
+	duration: song.duration,
+	album: { id: song.album_id || 0, name: song.album_name || '' },
+	artists: [{ id: song.artist_id || 0, name: song.artist || '' }],
+});
+
+const search = async (info) => {
+	const mainArtist = info.artists[0]?.name || '';
+	const query = `"${info.name}" ${mainArtist}`.trim();
+	const url = `http://127.0.0.1:5000/api/local/search?q=${encodeURIComponent(query)}&mode=any&limit=10`;
+	const headers = { 'X-API-Key': api_key };
+
+	try {
+		const response = await request('GET', url, headers);
+		const jsonBody = await response.json();
+		if (jsonBody.code === 200 && jsonBody.data) {
+			// We assume the local API returns a list of songs in 'items' or directly in 'data'
+			const list = (jsonBody.data.items || jsonBody.data.songs || jsonBody.data.list || []).map(format);
+			const matched = select(list, info);
+			return matched ? matched.id : Promise.reject();
+		}
+		return Promise.reject();
+	} catch (e) {
+		return Promise.reject();
+	}
+};
+
+const track = async (id) => {
+	const url = `http://127.0.0.1:5000/api/local/play_info/${id}`;
+	const headers = { 'X-API-Key': api_key };
+
+	try {
+		const response = await request('GET', url, headers);
+		const jsonBody = await response.json();
+		if (jsonBody.code === 200 && jsonBody.data && jsonBody.data.url) {
+			return jsonBody.data.url;
+		}
+		return Promise.reject();
+	} catch (e) {
+		return Promise.reject();
+	}
+};
+
+const cs = getManagedCacheStorage('provider/mkr');
+
+const check = async (info) => {
+	try {
+		const id = await cs.cache(info, () => search(info));
+		return await track(id);
+	} catch (e) {
+		return Promise.reject();
+	}
+};
+
+module.exports = { check, track };

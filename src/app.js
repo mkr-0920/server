@@ -70,7 +70,7 @@ const config = cli
 
 // 校验端口号
 global.address = config.address;
-config.port = (config.port || '8081:8082')
+config.port = (config.port || '58081:58082')
 	.split(':')
 	.map((string) => parseInt(string, 10)); // 使用基数10进行转换
 
@@ -240,6 +240,12 @@ setInterval(() => {
 		}
 		if (global.cnrelay) {
 			logger.info(`CNRelay is enabled: ${global.cnrelay}`);
+		}
+
+		if (global.endpoint) {
+			logger.info(`Startup Mode: [PROXY/FORWARDING] via endpoint: ${global.endpoint}`);
+		} else {
+			logger.info('Startup Mode: [DIRECT/PASSTHROUGH] (Package proxy is disabled)');
 		}
 	} catch (error) {
 		console.error('启动失败:', error);

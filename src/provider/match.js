@@ -6,6 +6,7 @@
 
 const find = require('./find');
 const request = require('../request');
+const { getMatch, saveMatch } = require('../database');
 const {
 	PROVIDERS: providers,
 	DEFAULT_SOURCE: defaultSrc,
@@ -20,7 +21,7 @@ const RequestCancelled = require('../exceptions/RequestCancelled');
 const logger = logScope('provider/match');
 
 const FOLLOW_SOURCE_ORDER =
-	(process.env.SEARCH_ALBUM || 'true').toLowerCase() === 'true';
+	(process.env.FOLLOW_SOURCE_ORDER || 'true').toLowerCase() === 'true';
 
 const isHttpResponseOk = (code) => code >= 200 && code <= 299;
 
@@ -37,10 +38,10 @@ const headerReferer = new Map([
  */
 async function getAudioFromSource(source, info) {
 	logger.debug({ source, info }, 'Getting the audio...');
-	const audioData = await providers[source].check(info);
-	if (!audioData) throw new SongNotAvailable(source);
+	const rawAudioData = await providers[source].check(info);
+	if (!rawAudioData) throw new SongNotAvailable(source);
 
-	const urlToCheck = (typeof audioData === 'object' && audioData.url) ? audioData.url : audioData;
+	const urlToCheck = (typeof rawAudioData === 'object' && rawAudioData.url) ? rawAudioData.url : rawAudioData;
 	const song = await check(urlToCheck);
 
 	logger.debug(song, 'The matched song is:');
@@ -59,8 +60,9 @@ async function getAudioFromSource(source, info) {
 	logger.debug({ source, info }, 'The audio matched!');
 	return {
 		...song,
-		...(typeof audioData === 'object' && audioData),
+		...(typeof rawAudioData === 'object' && rawAudioData),
 		source,
+		native_id: (typeof rawAudioData === 'object' && rawAudioData.id) ? rawAudioData.id : rawAudioData
 	};
 }
 
@@ -76,8 +78,48 @@ async function match(id, source, data) {
 		(name) => name in providers
 	);
 
-	const audioInfo = await find(id, data);
 	let audioData = null;
+
+	// Level 2: Persistent Cache Check (SQLite)
+	const cachedMatch = getMatch(id);
+	if (cachedMatch && providers[cachedMatch.source] && typeof providers[cachedMatch.source].track === 'function') {
+		logger.info(`[CACHE HIT] Found persistent match for song ${id} in provider [${cachedMatch.source}]`);
+		try {
+			// Extract the best parameter for track(). 
+			// We now store the exact ID needed by the provider in meta.native_id or matched_id
+			const trackParam = cachedMatch.meta.native_id || cachedMatch.matched_id || cachedMatch.meta;
+			
+			// Defensive check: if it looks like a URL, don't use it as a tracking ID
+			if (typeof trackParam === 'string' && trackParam.includes('http')) {
+				throw new Error('Cached ID is a URL, ignoring.');
+			}
+
+			const url = await providers[cachedMatch.source].track(trackParam);
+			if (url) {
+				const urlToCheck = (typeof url === 'object' && url.url) ? url.url : url;
+				audioData = await check(urlToCheck);
+				audioData.source = cachedMatch.source;
+				audioData.native_id = trackParam;
+
+				// Keep the meta data around
+				Object.assign(audioData, cachedMatch.meta);
+
+				logger.info(
+					{
+						'歌曲ID': id,
+						'音源平台': audioData.source,
+						'码率 (bps)': audioData.br,
+						'歌曲链接': audioData.url
+					},
+					`[MATCH SUCCESS] (从持久化缓存) 最终选择的音源:`
+				);
+				return audioData;
+			}
+		} catch (e) {
+			logger.warn(`[CACHE INVALID] Persistent match for ${id} failed to track. Re-searching...`);
+		}
+	}
+	const audioInfo = await find(id, data);
 
 	if (FOLLOW_SOURCE_ORDER) {
 		// 策略一（可选）：“顺序优先”模式 (按顺序搜索，找到即停)
@@ -128,6 +170,10 @@ async function match(id, source, data) {
 		audioData = audioDataArr.reduce((best, current) =>
 			(current.br || 0) >= (best.br || 0) ? current : best
 		);
+	}
+
+	if (audioData && audioData.source !== 'pyncmd') {
+		saveMatch(id, audioData.source, audioData);
 	}
 
 	// 使用 logger.info 打印最终胜出的音源详细信息
@@ -203,7 +249,7 @@ async function check(url) {
 		song.size =
 			parseInt(
 				(headers['content-range'] || '').split('/').pop() ||
-					headers['content-length']
+				headers['content-length']
 			) || 0;
 	}
 

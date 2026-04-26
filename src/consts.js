@@ -1,5 +1,6 @@
-const DEFAULT_SOURCE = ['pyncmd', 'qq', 'local', 'kugou', 'bodian', 'migu', 'ytdlp'];
+const DEFAULT_SOURCE = ['pyncmd', 'qq', 'mkr'];
 const PROVIDERS = {
+	mkr: require('./provider/mkr'),
 	qq: require('./provider/qq'),
 	kugou: require('./provider/kugou'),
 	kuwo: require('./provider/kuwo'),
@@ -12,7 +13,6 @@ const PROVIDERS = {
 	bilibili: require('./provider/bilibili'),
 	bilivideo: require('./provider/bilivideo'),
 	pyncmd: require('./provider/pyncmd'),
-	local: require('./provider/local'),
 };
 
 module.exports = {
