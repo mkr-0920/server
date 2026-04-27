@@ -1,4 +1,4 @@
-const DEFAULT_SOURCE = ['pyncmd', 'qq', 'mkr'];
+const DEFAULT_SOURCE = ['pyncmd', 'qq'];
 const PROVIDERS = {
 	mkr: require('./provider/mkr'),
 	qq: require('./provider/qq'),

@@ -100,25 +100,20 @@ const track = async (mid) => {
 	if (!mid || typeof mid !== 'string') return Promise.reject();
 
 	try {
-		// Local API expects the mid string directly
-		const apiUrl = `http://127.0.0.1:5000/api/qq?mid=${mid}`;
+		const baseUrl = process.env.LX_API_URL || '';
+		const apiUrl = `${baseUrl}/url?source=tx&songId=${mid}&quality=flac`;
 
 		const apiHeaders = {};
-		const apiKey = process.env.QQ_API_KEY || '';
+		const apiKey = process.env.LX_API_KEY || '';
 		if (apiKey) {
-			apiHeaders['X-API-Key'] = apiKey;
+			apiHeaders['X-Request-Key'] = apiKey;
 		}
 
 		const response = await request('GET', apiUrl, apiHeaders);
 		const jsonBody = await response.json();
 
-		if (jsonBody.code === 200 && jsonBody.data && jsonBody.data.urls) {
-			const urls = jsonBody.data.urls;
-			const url = urls.master || urls.flac || urls['320'] || urls['128'];
-
-			if (url) {
-				return url;
-			}
+		if (jsonBody.code === 200 && jsonBody.url) {
+			return jsonBody.url;
 		}
 
 		return Promise.reject();
