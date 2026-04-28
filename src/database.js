@@ -47,6 +47,16 @@ const getPersistentMatch = (netease_id) => {
 	try {
 		const row = stmtGet.get(String(netease_id));
 		if (row) {
+			// 设定全局 TTL 为 30 天
+			const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+			if (row.updated_at && Date.now() - row.updated_at > thirtyDays) {
+				logger.info(`[CACHE EXPIRED] Persistent match for ${netease_id} exceeded TTL (30 days). Removing...`);
+				try {
+					db.prepare('DELETE FROM persistent_match WHERE netease_id = ?').run(String(netease_id));
+				} catch (err) {}
+				return null;
+			}
+			
 			row.metadata = JSON.parse(row.metadata);
 			return row;
 		}
