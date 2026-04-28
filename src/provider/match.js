@@ -94,6 +94,16 @@ async function match(id, source, data) {
 			if (url) {
 				const urlToCheck = (typeof url === 'object' && url.url) ? url.url : url;
 				audioData = await check(urlToCheck);
+
+				// 终极防御：如果缓存里有文件大小记录，且新的文件大小与其相差超过 20%，高度怀疑音源被偷换
+				if (cachedMatch.metadata && cachedMatch.metadata.size && audioData.size) {
+					const diffRatio = Math.abs(audioData.size - cachedMatch.metadata.size) / cachedMatch.metadata.size;
+					if (diffRatio > 0.2) {
+						logger.warn(`[CACHE INVALID] Size mismatch for ${id}. Expected ~${cachedMatch.metadata.size}, got ${audioData.size}. Re-searching...`);
+						throw new Error('Size mismatch, potential hot-swap detected');
+					}
+				}
+
 				audioData.source = platform;
 				audioData.platform_id = song_id;
 				
@@ -167,7 +177,8 @@ async function match(id, source, data) {
 
 	// Only save if the provider gave us a clean string platform_id and it's not pyncmd
 	if (audioData && audioData.source !== 'pyncmd' && audioData.platform_id) {
-		savePersistentMatch(id, audioData.source, audioData.platform_id, audioData);
+		const { url, ...metadataToSave } = audioData;
+		savePersistentMatch(id, audioData.source, audioData.platform_id, metadataToSave);
 	}
 
 	logger.info(
@@ -285,4 +296,9 @@ function decode(buffer) {
 	}
 }
 
-module.exports = match;
+const { getManagedCacheStorage } = require('../cache');
+const memoryCache = getManagedCacheStorage('match');
+// 内存缓存保留 20 分钟，专门用于存短时播放链接
+memoryCache.aliveDuration = 20 * 60 * 1000;
+
+module.exports = (id, source, data) => memoryCache.cache(id, () => match(id, source, data));

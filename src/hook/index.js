@@ -23,7 +23,7 @@ const hook = {
 };
 
 hook.target.host = new Set([
-	'music.163.com', 'interface.music.163.com', 'interface3.music.163.com',
+	'music.163.com', 'interface.music.163.com', 'interface3.music.163.com', 'interfacepc.music.163.com',
 	'apm.music.163.com', 'apm3.music.163.com',
 	'interface.music.163.com.163jiasu.com', 'interface3.music.163.com.163jiasu.com',
 ]);

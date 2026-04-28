@@ -45,6 +45,15 @@ const getPersistentMatch = (netease_id) => {
 		// 直接从内存对象中按 key 取值，时间复杂度为 O(1)，速度极快
 		const match = cache[netease_id];
 		if (match) {
+			// 设定全局 TTL 为 30 天
+			const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+			if (match.updated_at && Date.now() - match.updated_at > thirtyDays) {
+				logger.info(`[CACHE EXPIRED] Persistent match for ${netease_id} exceeded TTL (30 days). Removing...`);
+				delete cache[netease_id];
+				persistData();
+				return null;
+			}
+			
 			return {
 				platform: match.platform,
 				song_id: match.song_id,

@@ -22,7 +22,8 @@ async function parseDotenv(filePath) {
 	});
 
 	for await (const line of rl) {
-		if (line.startsWith('#')) continue;
+		const trimmedLine = line.trim();
+		if (!trimmedLine || trimmedLine.startsWith('#') || !trimmedLine.includes('=')) continue;
 
 		const [key, value] = line.split(/=(.+)/, 2);
 		env[key.trimEnd()] = value.trimStart();
