@@ -89,26 +89,57 @@ async function match(id, source, data) {
 		logger.info(`[CACHE HIT] Found persistent match for song ${id} in provider [${platform}]`);
 		
 		try {
-			// Call track() with strictly the string song_id
-			const url = await providers[platform].track(song_id);
-			if (url) {
-				const urlToCheck = (typeof url === 'object' && url.url) ? url.url : url;
-				audioData = await check(urlToCheck);
-
-				// 终极防御：如果缓存里有文件大小记录，且新的文件大小与其相差超过 20%，高度怀疑音源被偷换
-				if (cachedMatch.metadata && cachedMatch.metadata.size && audioData.size) {
-					const diffRatio = Math.abs(audioData.size - cachedMatch.metadata.size) / cachedMatch.metadata.size;
-					if (diffRatio > 0.2) {
-						logger.warn(`[CACHE INVALID] Size mismatch for ${id}. Expected ~${cachedMatch.metadata.size}, got ${audioData.size}. Re-searching...`);
-						throw new Error('Size mismatch, potential hot-swap detected');
+			let useCachedUrl = false;
+			// 乐观锁：假设存下来的 URL 仍然有效，直接 check
+			if (cachedMatch.metadata && cachedMatch.metadata.url) {
+				try {
+					logger.debug(`[OPTIMISTIC CACHE] Testing cached URL for song ${id}...`);
+					audioData = await check(cachedMatch.metadata.url);
+					
+					// 试探成功后，检查体积是否被掉包 (误差>20%)
+					if (cachedMatch.metadata.size && audioData.size) {
+						const diffRatio = Math.abs(audioData.size - cachedMatch.metadata.size) / cachedMatch.metadata.size;
+						if (diffRatio > 0.2) {
+							logger.warn(`[CACHE INVALID] Size mismatch for ${id}. Expected ~${cachedMatch.metadata.size}, got ${audioData.size}. Re-searching...`);
+							throw new Error('Size mismatch, potential hot-swap detected');
+						}
 					}
+					
+					audioData.source = platform;
+					audioData.platform_id = song_id;
+					useCachedUrl = true;
+					logger.info(`[OPTIMISTIC CACHE SUCCESS] Cached URL is still valid!`);
+				} catch (err) {
+					logger.warn(`[OPTIMISTIC CACHE FAILED] Cached URL expired or invalid (Error: ${err.message}). Fetching a new URL...`);
 				}
+			}
 
-				audioData.source = platform;
-				audioData.platform_id = song_id;
-				
-				Object.assign(audioData, cachedMatch.metadata);
-				
+			if (!useCachedUrl) {
+				// 回源：重新请求 track 获取新鲜 URL
+				const url = await providers[platform].track(song_id);
+				if (url) {
+					const urlToCheck = (typeof url === 'object' && url.url) ? url.url : url;
+					audioData = await check(urlToCheck);
+
+					if (cachedMatch.metadata && cachedMatch.metadata.size && audioData.size) {
+						const diffRatio = Math.abs(audioData.size - cachedMatch.metadata.size) / cachedMatch.metadata.size;
+						if (diffRatio > 0.2) {
+							logger.warn(`[CACHE INVALID] Size mismatch for ${id}. Expected ~${cachedMatch.metadata.size}, got ${audioData.size}. Re-searching...`);
+							throw new Error('Size mismatch, potential hot-swap detected');
+						}
+					}
+
+					audioData.source = platform;
+					audioData.platform_id = song_id;
+					
+					// 覆盖更新：将带有新 URL 的完整数据重新写入 JSON
+					savePersistentMatch(id, audioData.source, audioData.platform_id, audioData);
+				} else {
+					throw new Error('Track returned empty URL');
+				}
+			}
+			
+			if (audioData) {
 				logger.info(
 					{
 						'歌曲ID': id,
@@ -121,7 +152,7 @@ async function match(id, source, data) {
 				return audioData;
 			}
 		} catch (e) {
-			logger.warn(`[CACHE INVALID] Persistent match for ${id} failed to track. Re-searching...`);
+			logger.warn(`[CACHE INVALID] Persistent match for ${id} failed entirely. Re-searching full platforms...`);
 		}
 	}
 
@@ -177,8 +208,8 @@ async function match(id, source, data) {
 
 	// Only save if the provider gave us a clean string platform_id and it's not pyncmd
 	if (audioData && audioData.source !== 'pyncmd' && audioData.platform_id) {
-		const { url, ...metadataToSave } = audioData;
-		savePersistentMatch(id, audioData.source, audioData.platform_id, metadataToSave);
+		// 全量落库（恢复 URL 存储）
+		savePersistentMatch(id, audioData.source, audioData.platform_id, audioData);
 	}
 
 	logger.info(
@@ -296,9 +327,4 @@ function decode(buffer) {
 	}
 }
 
-const { getManagedCacheStorage } = require('../cache');
-const memoryCache = getManagedCacheStorage('match');
-// 内存缓存保留 20 分钟，专门用于存短时播放链接
-memoryCache.aliveDuration = 20 * 60 * 1000;
-
-module.exports = (id, source, data) => memoryCache.cache(id, () => match(id, source, data));
+module.exports = match;
